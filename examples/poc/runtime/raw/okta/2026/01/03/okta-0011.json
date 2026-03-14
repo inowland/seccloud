@@ -1,0 +1,19 @@
+{
+  "actor_email": "alice@example.com",
+  "actor_name": "Alice Admin",
+  "department": "security",
+  "event_type": "login",
+  "geo": "US-NY",
+  "ip": "10.0.0.12",
+  "observed_at": "2026-01-03T14:00:00Z",
+  "privileged": true,
+  "received_at": "2026-01-03T14:02:00Z",
+  "resource_id": "okta:admin-console",
+  "resource_kind": "app",
+  "resource_name": "Admin Console",
+  "role": "security-admin",
+  "scenario": "baseline",
+  "sensitivity": "high",
+  "source": "okta",
+  "source_event_id": "okta-0011"
+}

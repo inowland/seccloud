@@ -1,0 +1,39 @@
+{
+  "confidence": 0.99,
+  "detection_id": "det-d9947ba2ccff",
+  "event_ids": [
+    "evt-033aa44a588e14a5"
+  ],
+  "evidence": [
+    {
+      "object_key": "snowflake/2026/01/09/snowflake-0043.json",
+      "observed_at": "2026-01-09T14:20:00Z",
+      "raw_event_id": "snowflake-0043",
+      "source": "snowflake"
+    }
+  ],
+  "feature_attributions": {
+    "large_query": 0.15,
+    "new_action_for_principal": 0.25,
+    "new_resource_for_principal": 0.25,
+    "peer_group_rarity": 0.15,
+    "sensitive_resource": 0.15
+  },
+  "model_version": "rules-heuristics-fusion-v1",
+  "reasons": [
+    "principal_has_not_performed_this_action_before",
+    "principal_has_not_accessed_this_resource_before",
+    "resource_is_rare_for_peer_group",
+    "resource_is_sensitive",
+    "large_sensitive_query"
+  ],
+  "related_entity_ids": [
+    "alice@example.com",
+    "snowflake:dataset/payroll"
+  ],
+  "scenario": "unusual_data_access",
+  "score": 0.95,
+  "severity": "high",
+  "status": "open",
+  "title": "Unusual sensitive dataset access"
+}

@@ -1,0 +1,17 @@
+{
+  "contains_raw_payloads": false,
+  "dead_letter_count": 2,
+  "dead_letter_counts_by_source": {
+    "gworkspace": 1,
+    "okta": 1
+  },
+  "detection_count": 5,
+  "event_counts_by_source": {
+    "github": 20,
+    "gworkspace": 9,
+    "okta": 10,
+    "snowflake": 13
+  },
+  "normalized_event_count": 52,
+  "workspace": "examples/poc/demo-runtime"
+}

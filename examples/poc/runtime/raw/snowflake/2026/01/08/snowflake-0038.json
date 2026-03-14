@@ -1,0 +1,18 @@
+{
+  "actor_email": "carol@example.com",
+  "actor_name": "Carol Query",
+  "department": "data",
+  "event_type": "query",
+  "observed_at": "2026-01-08T16:00:00Z",
+  "received_at": "2026-01-08T16:02:00Z",
+  "resource_id": "snowflake:dataset/sales_summary",
+  "resource_kind": "dataset",
+  "resource_name": "sales_summary",
+  "role": "data-analyst",
+  "rows_read": 1200,
+  "scenario": "baseline",
+  "sensitivity": "internal",
+  "source": "snowflake",
+  "source_event_id": "snowflake-0038",
+  "warehouse": "analytics_wh"
+}

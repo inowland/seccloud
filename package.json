@@ -1,0 +1,35 @@
+{
+  "name": "seccloud",
+  "version": "1.0.0",
+  "description": "This repo contains a synthetic-first PoC for a BYOC insider-risk substrate and thin investigation workflow.",
+  "scripts": {
+    "lint": "npm run lint:py && npm run lint:web && npm run format:check",
+    "lint:fix": "uv run ruff check --fix src tests && uv run ruff format src tests && eslint web/src --ext .js,.jsx --fix && npm run format",
+    "lint:py": "uv run ruff check src tests && uv run ruff format --check src tests",
+    "lint:web": "eslint web/src --ext .js,.jsx",
+    "format": "uv run ruff format src tests && prettier --write \"web/**/*.{js,jsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
+    "format:check": "prettier --check \"web/**/*.{js,jsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
+    "precommit": "uv run pre-commit run --all-files",
+    "precommit:install": "uv run pre-commit install",
+    "demo:web": "vite --config web/vite.config.mjs",
+    "demo:web:build": "vite build --config web/vite.config.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "vite": "^8.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "globals": "^17.4.0",
+    "prettier": "^3.8.1"
+  }
+}

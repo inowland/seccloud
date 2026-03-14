@@ -1,0 +1,19 @@
+{
+  "actor_email": "bob@example.com",
+  "actor_name": "Bob Builder",
+  "bytes_transferred_mb": 410,
+  "department": "engineering",
+  "event_type": "archive_download",
+  "incident_response_window": true,
+  "incident_ticket": "INC-4242",
+  "observed_at": "2026-01-09T14:50:00Z",
+  "received_at": "2026-01-09T14:52:00Z",
+  "resource_id": "github:repo/incident-runbooks",
+  "resource_kind": "repo",
+  "resource_name": "incident-runbooks",
+  "role": "staff-engineer",
+  "scenario": "benign_incident_response_access",
+  "sensitivity": "high",
+  "source": "github",
+  "source_event_id": "github-0044"
+}

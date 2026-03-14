@@ -1,0 +1,51 @@
+{
+  "mapping_target": "raw-event-v1",
+  "mapping_version": "vendor-export-v1",
+  "source_pack": [
+    "okta",
+    "gworkspace",
+    "github",
+    "snowflake"
+  ],
+  "sources": [
+    {
+      "display_name": "Okta System Log",
+      "fixture_file": "okta_system_log.jsonl",
+      "mapping_target": "raw-event-v1",
+      "source": "okta",
+      "supported_event_types": [
+        "user.session.start"
+      ]
+    },
+    {
+      "display_name": "Google Workspace Drive Audit",
+      "fixture_file": "gworkspace_drive_audit.jsonl",
+      "mapping_target": "raw-event-v1",
+      "source": "gworkspace",
+      "supported_event_types": [
+        "view",
+        "share"
+      ]
+    },
+    {
+      "display_name": "GitHub Audit Log",
+      "fixture_file": "github_audit_log.jsonl",
+      "mapping_target": "raw-event-v1",
+      "source": "github",
+      "supported_event_types": [
+        "repo.view",
+        "repo.archive_download"
+      ]
+    },
+    {
+      "display_name": "Snowflake Query History",
+      "fixture_file": "snowflake_query_history.jsonl",
+      "mapping_target": "raw-event-v1",
+      "source": "snowflake",
+      "supported_event_types": [
+        "SELECT",
+        "COPY"
+      ]
+    }
+  ]
+}

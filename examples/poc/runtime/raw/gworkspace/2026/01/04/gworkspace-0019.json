@@ -1,0 +1,17 @@
+{
+  "actor_email": "dave@example.com",
+  "actor_name": "Dave Share",
+  "department": "product",
+  "event_type": "view",
+  "external": false,
+  "observed_at": "2026-01-04T17:00:00Z",
+  "received_at": "2026-01-04T17:02:00Z",
+  "resource_id": "gworkspace:doc/product-plan",
+  "resource_kind": "document",
+  "resource_name": "Product Plan",
+  "role": "pm",
+  "scenario": "baseline",
+  "sensitivity": "internal",
+  "source": "gworkspace",
+  "source_event_id": "gworkspace-0019"
+}

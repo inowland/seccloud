@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seccloud-poc"
+version = "0.1.0"
+description = "Synthetic-first PoC for BYOC insider-risk substrate and investigation workflows."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.135.1",
+    "psycopg[binary]>=3.3.3",
+    "uvicorn>=0.41.0",
+]
+
+[project.scripts]
+seccloud = "seccloud.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.6",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E402"]
+"src/seccloud/onboarding.py" = ["E501"]
+"src/seccloud/reports.py" = ["E501"]
+"src/seccloud/source_pack.py" = ["E501"]
+"src/seccloud/vendor_exports.py" = ["E501"]

@@ -1,0 +1,17 @@
+{
+  "actor_email": "emma@example.com",
+  "actor_name": "Emma Move",
+  "bytes_transferred_mb": 3,
+  "department": "engineering",
+  "event_type": "view",
+  "observed_at": "2026-01-04T18:00:00Z",
+  "received_at": "2026-01-04T18:02:00Z",
+  "resource_id": "github:repo/ml-platform",
+  "resource_kind": "repo",
+  "resource_name": "ml-platform",
+  "role": "senior-engineer",
+  "scenario": "baseline",
+  "sensitivity": "internal",
+  "source": "github",
+  "source_event_id": "github-0020"
+}

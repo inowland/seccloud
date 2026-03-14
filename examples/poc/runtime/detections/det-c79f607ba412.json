@@ -1,0 +1,37 @@
+{
+  "confidence": 0.9,
+  "detection_id": "det-c79f607ba412",
+  "event_ids": [
+    "evt-d630d9ddb377fed6"
+  ],
+  "evidence": [
+    {
+      "object_key": "okta/2026/01/09/okta-0041.json",
+      "observed_at": "2026-01-09T14:00:00Z",
+      "raw_event_id": "okta-0041",
+      "source": "okta"
+    }
+  ],
+  "feature_attributions": {
+    "new_geo": 0.2,
+    "privileged_activity": 0.2,
+    "privileged_geo_combo": 0.15,
+    "sensitive_resource": 0.15
+  },
+  "model_version": "rules-heuristics-fusion-v1",
+  "reasons": [
+    "resource_is_sensitive",
+    "privileged_identity_activity",
+    "login_from_unfamiliar_geography",
+    "privileged_login_combines_unfamiliar_geo_and_sensitive_access"
+  ],
+  "related_entity_ids": [
+    "alice@example.com",
+    "okta:admin-console"
+  ],
+  "scenario": "compromised_privileged_identity",
+  "score": 0.7,
+  "severity": "medium",
+  "status": "open",
+  "title": "Privileged identity used from an unfamiliar geography"
+}

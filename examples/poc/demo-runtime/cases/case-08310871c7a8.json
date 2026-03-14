@@ -1,0 +1,53 @@
+{
+  "analyst_notes": [],
+  "case_id": "case-08310871c7a8",
+  "created_at": "2026-03-14T21:45:36Z",
+  "detection_ids": [
+    "det-47d5c4dbcf78"
+  ],
+  "disposition": null,
+  "evidence_snapshots": [
+    {
+      "pointer": {
+        "object_key": "snowflake/2026/01/09/snowflake-0047.json",
+        "observed_at": "2026-01-09T16:00:00Z",
+        "raw_event_id": "snowflake-0047",
+        "source": "snowflake"
+      },
+      "raw_payload": {
+        "actor_email": "carol@example.com",
+        "actor_name": "Carol Query",
+        "department": "data",
+        "event_type": "export",
+        "observed_at": "2026-01-09T16:00:00Z",
+        "received_at": "2026-01-09T16:02:00Z",
+        "resource_id": "snowflake:dataset/customer_pii",
+        "resource_kind": "dataset",
+        "resource_name": "customer_pii",
+        "role": "data-analyst",
+        "rows_read": 220000,
+        "scenario": "unusual_data_access",
+        "sensitivity": "critical",
+        "source": "snowflake",
+        "source_event_id": "snowflake-0047",
+        "warehouse": "analytics_wh"
+      },
+      "retention_expired": false
+    }
+  ],
+  "feedback_labels": [],
+  "status": "open",
+  "timeline_event_ids": [
+    "evt-98cd5394a8d8bda1",
+    "evt-abe54de8861bc34a",
+    "evt-31d8967e5dc517d3",
+    "evt-a46dfde363e6c17f",
+    "evt-b2d2c016e72faf1e",
+    "evt-19c627ce249cf26d",
+    "evt-d52decfb5c0d3ba1",
+    "evt-faa1647faff27c1f",
+    "evt-f2496cd61222cfa5",
+    "evt-22beec3a405e4ee1"
+  ],
+  "updated_at": "2026-03-14T21:45:36Z"
+}

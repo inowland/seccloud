@@ -1,0 +1,435 @@
+{
+  "access_histories": {
+    "github:repo/forecasting": {
+      "event_ids": [
+        "evt-ac261c1680fb6964"
+      ],
+      "principal_ids": [
+        "emma@example.com"
+      ],
+      "resource_name": "forecasting"
+    },
+    "github:repo/incident-runbooks": {
+      "event_ids": [
+        "evt-d90db360a09c516a"
+      ],
+      "principal_ids": [
+        "bob@example.com"
+      ],
+      "resource_name": "incident-runbooks"
+    },
+    "github:repo/ml-platform": {
+      "event_ids": [
+        "evt-bdbddb5cf43d1890",
+        "evt-d6e087ceb83d8ae1",
+        "evt-a436f865bd3491b2",
+        "evt-2eea45547297cebd",
+        "evt-e290f2777a1ea149",
+        "evt-57e5d2a124609156",
+        "evt-2f81df3c5aedfb8c",
+        "evt-8f7970ec6d89f3b1"
+      ],
+      "principal_ids": [
+        "emma@example.com"
+      ],
+      "resource_name": "ml-platform"
+    },
+    "github:repo/payments-service": {
+      "event_ids": [
+        "evt-9d34efbf2129e2bc",
+        "evt-9b909542db898786",
+        "evt-860c4ef754eed269",
+        "evt-cfa22941b9ff10b4",
+        "evt-78c46f02864c46d9",
+        "evt-31b6555af3e9300c",
+        "evt-6854d3e518f2f73e",
+        "evt-4cbb65cfac1e12a0",
+        "evt-6bc4bd096d507643"
+      ],
+      "principal_ids": [
+        "bob@example.com"
+      ],
+      "resource_name": "payments-service"
+    },
+    "github:repo/security-agent": {
+      "event_ids": [
+        "evt-65a4dffa255effde"
+      ],
+      "principal_ids": [
+        "bob@example.com"
+      ],
+      "resource_name": "security-agent"
+    },
+    "gworkspace:doc/board-notes": {
+      "event_ids": [
+        "evt-35e4079f1092d5c0"
+      ],
+      "principal_ids": [
+        "dave@example.com"
+      ],
+      "resource_name": "Board Notes"
+    },
+    "gworkspace:doc/product-plan": {
+      "event_ids": [
+        "evt-a4f99cbb73d3afdd",
+        "evt-31ebfb24f9cf1f77",
+        "evt-bb17b5706b4eb3e6",
+        "evt-69e57c91c97c2ccb",
+        "evt-6d3d1f82582f4540",
+        "evt-b856e0eff5951739",
+        "evt-846b293ea698f1ba",
+        "evt-984d4fa34620c45f"
+      ],
+      "principal_ids": [
+        "dave@example.com"
+      ],
+      "resource_name": "Product Plan"
+    },
+    "okta:admin-console": {
+      "event_ids": [
+        "evt-994bbcde4d089ebc",
+        "evt-ae8a8c9f48dbb42e",
+        "evt-bf6868fb226a32d9",
+        "evt-5e7a4e1673531f19",
+        "evt-d5a8bbfe997d96a8",
+        "evt-1b144438ef5b9823",
+        "evt-098741711cac2e42",
+        "evt-e1609571dbf53ccb",
+        "evt-d630d9ddb377fed6",
+        "evt-c2db6d6c6efa2ed2"
+      ],
+      "principal_ids": [
+        "alice@example.com"
+      ],
+      "resource_name": "Admin Console"
+    },
+    "snowflake:dataset/customer_pii": {
+      "event_ids": [
+        "evt-22beec3a405e4ee1"
+      ],
+      "principal_ids": [
+        "carol@example.com"
+      ],
+      "resource_name": "customer_pii"
+    },
+    "snowflake:dataset/forecasting": {
+      "event_ids": [
+        "evt-e9414b0136947c16"
+      ],
+      "principal_ids": [
+        "emma@example.com"
+      ],
+      "resource_name": "forecasting"
+    },
+    "snowflake:dataset/payroll": {
+      "event_ids": [
+        "evt-033aa44a588e14a5"
+      ],
+      "principal_ids": [
+        "alice@example.com"
+      ],
+      "resource_name": "payroll"
+    },
+    "snowflake:dataset/revenue_forecast": {
+      "event_ids": [
+        "evt-f2496cd61222cfa5"
+      ],
+      "principal_ids": [
+        "carol@example.com"
+      ],
+      "resource_name": "revenue_forecast"
+    },
+    "snowflake:dataset/sales_summary": {
+      "event_ids": [
+        "evt-98cd5394a8d8bda1",
+        "evt-abe54de8861bc34a",
+        "evt-31d8967e5dc517d3",
+        "evt-54ced8a31d2d1e92",
+        "evt-a46dfde363e6c17f",
+        "evt-b2d2c016e72faf1e",
+        "evt-19c627ce249cf26d",
+        "evt-d52decfb5c0d3ba1",
+        "evt-faa1647faff27c1f"
+      ],
+      "principal_ids": [
+        "carol@example.com"
+      ],
+      "resource_name": "sales_summary"
+    }
+  },
+  "aggregates": {
+    "events_by_source": {
+      "github": 20,
+      "gworkspace": 9,
+      "okta": 10,
+      "snowflake": 13
+    },
+    "total_events": 52
+  },
+  "case_artifacts": {
+    "case-028608d1ab94": {
+      "created_at": "2026-03-14T21:03:21Z",
+      "detection_ids": [
+        "det-47d5c4dbcf78"
+      ],
+      "timeline_event_ids": [
+        "evt-98cd5394a8d8bda1",
+        "evt-abe54de8861bc34a",
+        "evt-31d8967e5dc517d3",
+        "evt-54ced8a31d2d1e92",
+        "evt-a46dfde363e6c17f",
+        "evt-b2d2c016e72faf1e",
+        "evt-19c627ce249cf26d",
+        "evt-d52decfb5c0d3ba1",
+        "evt-faa1647faff27c1f",
+        "evt-f2496cd61222cfa5",
+        "evt-22beec3a405e4ee1"
+      ]
+    },
+    "case-d77c4a634c7a": {
+      "created_at": "2026-03-14T21:03:21Z",
+      "detection_ids": [
+        "det-d9947ba2ccff"
+      ],
+      "timeline_event_ids": [
+        "evt-994bbcde4d089ebc",
+        "evt-ae8a8c9f48dbb42e",
+        "evt-bf6868fb226a32d9",
+        "evt-5e7a4e1673531f19",
+        "evt-d5a8bbfe997d96a8",
+        "evt-1b144438ef5b9823",
+        "evt-098741711cac2e42",
+        "evt-e1609571dbf53ccb",
+        "evt-d630d9ddb377fed6",
+        "evt-c2db6d6c6efa2ed2",
+        "evt-033aa44a588e14a5"
+      ]
+    },
+    "case-de8f56aa42f5": {
+      "created_at": "2026-03-14T21:03:21Z",
+      "detection_ids": [
+        "det-c79f607ba412"
+      ],
+      "timeline_event_ids": [
+        "evt-994bbcde4d089ebc",
+        "evt-ae8a8c9f48dbb42e",
+        "evt-bf6868fb226a32d9",
+        "evt-5e7a4e1673531f19",
+        "evt-d5a8bbfe997d96a8",
+        "evt-1b144438ef5b9823",
+        "evt-098741711cac2e42",
+        "evt-e1609571dbf53ccb",
+        "evt-d630d9ddb377fed6",
+        "evt-c2db6d6c6efa2ed2",
+        "evt-033aa44a588e14a5"
+      ]
+    },
+    "case-eccda3f08277": {
+      "created_at": "2026-03-14T21:03:21Z",
+      "detection_ids": [
+        "det-d700092717aa"
+      ],
+      "timeline_event_ids": [
+        "evt-a4f99cbb73d3afdd",
+        "evt-31ebfb24f9cf1f77",
+        "evt-bb17b5706b4eb3e6",
+        "evt-69e57c91c97c2ccb",
+        "evt-6d3d1f82582f4540",
+        "evt-b856e0eff5951739",
+        "evt-846b293ea698f1ba",
+        "evt-984d4fa34620c45f",
+        "evt-35e4079f1092d5c0"
+      ]
+    },
+    "case-f5f5b67c860c": {
+      "created_at": "2026-03-14T21:03:21Z",
+      "detection_ids": [
+        "det-f0d58be48a56"
+      ],
+      "timeline_event_ids": [
+        "evt-9d34efbf2129e2bc",
+        "evt-9b909542db898786",
+        "evt-860c4ef754eed269",
+        "evt-cfa22941b9ff10b4",
+        "evt-78c46f02864c46d9",
+        "evt-31b6555af3e9300c",
+        "evt-6854d3e518f2f73e",
+        "evt-4cbb65cfac1e12a0",
+        "evt-d90db360a09c516a",
+        "evt-65a4dffa255effde",
+        "evt-6bc4bd096d507643"
+      ]
+    }
+  },
+  "embeddings": {
+    "alice@example.com": [
+      11.0,
+      1.0,
+      1.0,
+      1.0,
+      0.0,
+      1.0
+    ],
+    "bob@example.com": [
+      11.0,
+      9.0,
+      9.0,
+      9.0,
+      0.0,
+      0.0
+    ],
+    "carol@example.com": [
+      11.0,
+      2.0,
+      1.0,
+      1.0,
+      0.0,
+      1.0
+    ],
+    "dave@example.com": [
+      9.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "emma@example.com": [
+      10.0,
+      1.0,
+      1.0,
+      1.0,
+      0.0,
+      0.0
+    ]
+  },
+  "feedback_labels": {},
+  "metadata": {
+    "normalized_event_count": 52,
+    "rebuild_source": "normalized_segments"
+  },
+  "peer_groups": {
+    "data": {
+      "principal_ids": [
+        "carol@example.com"
+      ],
+      "resource_counts": {
+        "snowflake:dataset/customer_pii": 1,
+        "snowflake:dataset/revenue_forecast": 1,
+        "snowflake:dataset/sales_summary": 9
+      }
+    },
+    "engineering": {
+      "principal_ids": [
+        "bob@example.com",
+        "emma@example.com"
+      ],
+      "resource_counts": {
+        "github:repo/forecasting": 1,
+        "github:repo/incident-runbooks": 1,
+        "github:repo/ml-platform": 8,
+        "github:repo/payments-service": 9,
+        "github:repo/security-agent": 1,
+        "snowflake:dataset/forecasting": 1
+      }
+    },
+    "product": {
+      "principal_ids": [
+        "dave@example.com"
+      ],
+      "resource_counts": {
+        "gworkspace:doc/board-notes": 1,
+        "gworkspace:doc/product-plan": 8
+      }
+    },
+    "security": {
+      "principal_ids": [
+        "alice@example.com"
+      ],
+      "resource_counts": {
+        "okta:admin-console": 10,
+        "snowflake:dataset/payroll": 1
+      }
+    }
+  },
+  "principal_profiles": {
+    "alice@example.com": {
+      "action_counts": {
+        "login": 10,
+        "query": 1
+      },
+      "last_seen": "2026-01-09T14:20:00Z",
+      "peer_group": "security",
+      "resource_counts": {
+        "okta:admin-console": 10,
+        "snowflake:dataset/payroll": 1
+      },
+      "seen_geos": [
+        "US-NY",
+        "DE-BE",
+        "US-CA"
+      ],
+      "total_events": 11
+    },
+    "bob@example.com": {
+      "action_counts": {
+        "archive_download": 2,
+        "read": 9
+      },
+      "last_seen": "2026-01-09T17:10:00Z",
+      "peer_group": "engineering",
+      "resource_counts": {
+        "github:repo/incident-runbooks": 1,
+        "github:repo/payments-service": 9,
+        "github:repo/security-agent": 1
+      },
+      "seen_geos": [],
+      "total_events": 11
+    },
+    "carol@example.com": {
+      "action_counts": {
+        "export": 2,
+        "query": 9
+      },
+      "last_seen": "2026-01-09T16:00:00Z",
+      "peer_group": "data",
+      "resource_counts": {
+        "snowflake:dataset/customer_pii": 1,
+        "snowflake:dataset/revenue_forecast": 1,
+        "snowflake:dataset/sales_summary": 9
+      },
+      "seen_geos": [],
+      "total_events": 11
+    },
+    "dave@example.com": {
+      "action_counts": {
+        "read": 8,
+        "share_external": 1
+      },
+      "last_seen": "2026-01-09T17:00:00Z",
+      "peer_group": "product",
+      "resource_counts": {
+        "gworkspace:doc/board-notes": 1,
+        "gworkspace:doc/product-plan": 8
+      },
+      "seen_geos": [],
+      "total_events": 9
+    },
+    "emma@example.com": {
+      "action_counts": {
+        "clone": 1,
+        "query": 1,
+        "read": 8
+      },
+      "last_seen": "2026-01-09T18:30:00Z",
+      "peer_group": "engineering",
+      "resource_counts": {
+        "github:repo/forecasting": 1,
+        "github:repo/ml-platform": 8,
+        "snowflake:dataset/forecasting": 1
+      },
+      "seen_geos": [],
+      "total_events": 10
+    }
+  }
+}

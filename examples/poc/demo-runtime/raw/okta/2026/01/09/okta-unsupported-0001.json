@@ -1,0 +1,19 @@
+{
+  "actor_email": "alice@example.com",
+  "actor_name": "Alice Admin",
+  "department": "security",
+  "event_type": "mfa_challenge",
+  "geo": "US-NY",
+  "ip": "10.0.0.88",
+  "observed_at": "2026-01-09T19:15:00Z",
+  "privileged": true,
+  "received_at": "2026-01-09T19:16:00Z",
+  "resource_id": "okta:admin-console",
+  "resource_kind": "app",
+  "resource_name": "Admin Console",
+  "role": "security-admin",
+  "scenario": "source_noise_control",
+  "sensitivity": "high",
+  "source": "okta",
+  "source_event_id": "okta-unsupported-0001"
+}

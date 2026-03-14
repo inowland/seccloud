@@ -1,0 +1,4 @@
+node_modules
+web-dist
+.venv
+src/seccloud_poc.egg-info

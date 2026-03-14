@@ -1,0 +1,20 @@
+{
+  "actor_email": "carol@example.com",
+  "actor_name": "Carol Query",
+  "approved_workflow": true,
+  "department": "data",
+  "event_type": "export",
+  "observed_at": "2026-01-09T15:40:00Z",
+  "quarter_close_window": true,
+  "received_at": "2026-01-09T15:42:00Z",
+  "resource_id": "snowflake:dataset/revenue_forecast",
+  "resource_kind": "dataset",
+  "resource_name": "revenue_forecast",
+  "role": "data-analyst",
+  "rows_read": 86000,
+  "scenario": "benign_finance_close_access",
+  "sensitivity": "high",
+  "source": "snowflake",
+  "source_event_id": "snowflake-0046",
+  "warehouse": "finance_wh"
+}

@@ -1,0 +1,16 @@
+{
+  "actor_email": "dave@example.com",
+  "actor_name": "Dave Share",
+  "department": "product",
+  "event_type": "view",
+  "external": false,
+  "observed_at": "2026-01-09T19:05:00Z",
+  "received_at": "2026-01-09T19:06:00Z",
+  "resource_id": "gworkspace:doc/malformed",
+  "resource_name": "Malformed Document",
+  "role": "pm",
+  "scenario": "source_noise_control",
+  "sensitivity": "internal",
+  "source": "gworkspace",
+  "source_event_id": "gworkspace-bad-0001"
+}
