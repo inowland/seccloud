@@ -9,8 +9,10 @@ description = "Synthetic-first PoC for BYOC insider-risk substrate and investiga
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.135.1",
+    "numpy>=2.0",
     "psycopg[binary]>=3.3.3",
     "pyarrow",
+    "torch>=2.6",
     "uvicorn>=0.41.0",
 ]
 
@@ -30,6 +32,7 @@ package = true
 dev = [
     "httpx>=0.28",
     "pre-commit>=4.5.1",
+    "pytest>=8.0",
     "ruff>=0.15.6",
 ]
 
