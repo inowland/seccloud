@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 from collections import Counter
 from datetime import timedelta
 from typing import Any
 
 from seccloud.contracts import Action, DerivedState, Event, EvidencePointer, Principal, Resource
+from seccloud.ids import entity_key, event_key
 from seccloud.scoring import build_embedding, score_event
+from seccloud.stats_projector import record_dead_letter, record_normalized_event, record_raw_event
 from seccloud.storage import Workspace, parse_timestamp, write_json
 from seccloud.synthetic import generate_synthetic_dataset
 
@@ -51,11 +52,6 @@ class RawEventValidationError(ValueError):
     pass
 
 
-def stable_event_id(source: str, source_event_id: str) -> str:
-    digest = hashlib.sha256(f"{source}:{source_event_id}".encode()).hexdigest()[:16]
-    return f"evt-{digest}"
-
-
 def semantic_event_key(raw_event: dict[str, Any]) -> str:
     parts = (
         raw_event["source"],
@@ -81,14 +77,29 @@ def seed_workspace(workspace: Workspace) -> dict[str, Any]:
     workspace.bootstrap()
     dataset = generate_synthetic_dataset()
     for raw_event in dataset.raw_events:
-        workspace.write_raw_event(raw_event["source"], raw_event)
+        _, created = workspace.write_raw_event(raw_event["source"], raw_event)
+        record_raw_event(workspace, raw_event["source"], raw_event, created=created)
     write_json(workspace.synthetic_manifest_path, {"expectations": dataset.expectations})
     return {"raw_event_count": len(dataset.raw_events), "expectations": dataset.expectations}
 
 
-def normalize_raw_event(raw_event: dict[str, Any], object_key: str) -> Event:
+def normalize_raw_event(workspace: Workspace, raw_event: dict[str, Any], object_key: str) -> Event:
+    principal_entity_key = entity_key(
+        entity_kind="principal",
+        source=raw_event["source"],
+        native_id=raw_event["actor_email"],
+        provider=raw_event["source"],
+    )
+    resource_entity_key = entity_key(
+        entity_kind="resource",
+        source=raw_event["source"],
+        native_id=raw_event["resource_id"],
+        provider=SOURCE_MAPPING[raw_event["source"]]["provider"],
+    )
     principal = Principal(
         id=raw_event["actor_email"],
+        entity_id=workspace.allocate_entity_id(principal_entity_key),
+        entity_key=principal_entity_key,
         kind="human",
         provider=raw_event["source"],
         email=raw_event["actor_email"],
@@ -99,6 +110,8 @@ def normalize_raw_event(raw_event: dict[str, Any], object_key: str) -> Event:
     source_meta = SOURCE_MAPPING[raw_event["source"]]
     resource = Resource(
         id=raw_event["resource_id"],
+        entity_id=workspace.allocate_entity_id(resource_entity_key),
+        entity_key=resource_entity_key,
         kind=raw_event["resource_kind"],
         provider=source_meta["provider"],
         name=raw_event["resource_name"],
@@ -107,7 +120,12 @@ def normalize_raw_event(raw_event: dict[str, Any], object_key: str) -> Event:
     )
     verb, category = ACTION_MAPPING[(raw_event["source"], raw_event["event_type"])]
     action = Action(source=raw_event["source"], verb=verb, category=category)
-    event_id = stable_event_id(raw_event["source"], raw_event["source_event_id"])
+    stable_key = event_key(
+        raw_event["source"],
+        raw_event["source_event_id"],
+        integration_id=raw_event.get("integration_id"),
+    )
+    event_id = workspace.allocate_event_id(stable_key)
     attributes = {
         key: value
         for key, value in raw_event.items()
@@ -135,6 +153,8 @@ def normalize_raw_event(raw_event: dict[str, Any], object_key: str) -> Event:
     )
     return Event(
         event_id=event_id,
+        event_key=stable_key,
+        integration_id=raw_event.get("integration_id"),
         source=raw_event["source"],
         source_event_id=raw_event["source_event_id"],
         principal=principal,
@@ -151,7 +171,9 @@ def ingest_raw_events(workspace: Workspace) -> dict[str, Any]:
     workspace.bootstrap()
     manifest = workspace.load_ingest_manifest()
     ingested_raw_ids = set(manifest["raw_event_ids"])
+    ingested_raw_keys = set(manifest.get("raw_event_keys", []))
     normalized_ids = set(manifest["normalized_event_ids"])
+    normalized_keys = set(manifest.get("normalized_event_keys", []))
     semantic_keys = set(manifest.get("semantic_event_keys", []))
     dead_letter_ids = set(manifest.get("dead_letter_ids", []))
 
@@ -164,16 +186,19 @@ def ingest_raw_events(workspace: Workspace) -> dict[str, Any]:
     for raw_event in workspace.list_raw_events():
         raw_event_id = raw_event.get("source_event_id", "unknown")
         source = raw_event.get("source", "unknown")
+        raw_key = event_key(source, raw_event_id, integration_id=raw_event.get("integration_id"))
         if raw_event_id not in ingested_raw_ids:
             ingested_raw_ids.add(raw_event_id)
             added_raw += 1
+        ingested_raw_keys.add(raw_key)
         try:
             validate_raw_event(raw_event)
         except RawEventValidationError as exc:
             reason = str(exc)
-            dead_letter_id = f"{source}:{raw_event_id}"
+            dead_letter_id = f"{source}:{raw_key}"
             if dead_letter_id not in dead_letter_ids:
-                workspace.save_dead_letter(source, raw_event, reason)
+                _, created = workspace.save_dead_letter(source, raw_event, reason)
+                record_dead_letter(workspace, source, raw_event, reason, created=created)
                 dead_letter_ids.add(dead_letter_id)
                 dead_letter_count += 1
             dead_letter_reasons[reason] = dead_letter_reasons.get(reason, 0) + 1
@@ -187,18 +212,23 @@ def ingest_raw_events(workspace: Workspace) -> dict[str, Any]:
         received_at = parse_timestamp(raw_event.get("received_at", raw_event["observed_at"]))
         if received_at - observed_at > LATE_ARRIVAL_THRESHOLD:
             late_arrival_count += 1
-        object_key = f"{source}/{received_at:%Y/%m/%d}/{raw_event_id}.json"
-        event = normalize_raw_event(raw_event, object_key)
-        if event.event_id in normalized_ids:
+        object_key = workspace.raw_object_key(source, raw_event)
+        event = normalize_raw_event(workspace, raw_event, object_key)
+        if event.event_key in normalized_keys:
             continue
-        workspace.write_normalized_event(event.to_dict())
+        normalized_keys.add(event.event_key)
         normalized_ids.add(event.event_id)
+        event_payload = event.to_dict()
+        _, created = workspace.write_normalized_event(event_payload)
+        record_normalized_event(workspace, event_payload, created=created)
         added_normalized += 1
 
     workspace.save_ingest_manifest(
         {
             "raw_event_ids": sorted(ingested_raw_ids),
+            "raw_event_keys": sorted(ingested_raw_keys),
             "normalized_event_ids": sorted(normalized_ids),
+            "normalized_event_keys": sorted(normalized_keys),
             "semantic_event_keys": sorted(semantic_keys),
             "dead_letter_ids": sorted(dead_letter_ids),
         }
@@ -331,14 +361,23 @@ def collect_ops_metadata(workspace: Workspace) -> dict[str, Any]:
 
 
 def run_runtime(workspace: Workspace) -> dict[str, Any]:
+    from seccloud.workers import run_local_processing_workers, submit_grouped_raw_events
+
     workspace.reset_runtime()
-    seed_result = seed_workspace(workspace)
-    ingest_result = ingest_raw_events(workspace)
-    detection_result = build_derived_state_and_detections(workspace)
-    ops_metadata = collect_ops_metadata(workspace)
+    dataset = generate_synthetic_dataset()
+    seed_result = submit_grouped_raw_events(
+        workspace,
+        records=dataset.raw_events,
+        intake_kind="synthetic_seed",
+        integration_id="synthetic-dataset",
+    )
+    seed_result["raw_event_count"] = len(dataset.raw_events)
+    seed_result["expectations"] = dataset.expectations
+    write_json(workspace.synthetic_manifest_path, {"expectations": dataset.expectations})
+    worker_result = run_local_processing_workers(workspace)
     return {
         "seed": seed_result,
-        "ingest": ingest_result,
-        "detect": detection_result,
-        "ops_metadata": ops_metadata,
+        "ingest": worker_result["normalization"]["ingest"],
+        "detect": worker_result["detect"],
+        "ops_metadata": worker_result["ops_metadata"],
     }

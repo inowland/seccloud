@@ -7,6 +7,7 @@ from typing import Any
 from seccloud.pipeline import validate_raw_event
 from seccloud.source_pack import SOURCE_CAPABILITY_CONTRACT, build_source_capability_matrix
 from seccloud.storage import Workspace
+from seccloud.workers import submit_grouped_raw_events
 
 
 def build_source_manifest() -> dict[str, Any]:
@@ -95,7 +96,7 @@ def validate_fixture_bundle(fixtures_dir: str | Path) -> dict[str, Any]:
 
 def import_fixture_bundle(workspace: Workspace, fixtures_dir: str | Path) -> dict[str, Any]:
     validation = validate_fixture_bundle(fixtures_dir)
-    imported_count = 0
+    accepted_events: list[dict[str, Any]] = []
     skipped_invalid_count = 0
     for source, details in validation["sources"].items():
         if not details["present"]:
@@ -105,12 +106,20 @@ def import_fixture_bundle(workspace: Workspace, fixtures_dir: str | Path) -> dic
             if event.get("source_event_id", "unknown") in invalid_event_ids:
                 skipped_invalid_count += 1
                 continue
-            workspace.write_raw_event(source, event)
-            imported_count += 1
+            accepted_events.append({**event, "source": source})
+    submission = submit_grouped_raw_events(
+        workspace,
+        records=accepted_events,
+        intake_kind="fixture_import",
+        integration_id="source-fixtures",
+        metadata={"fixtures_dir": str(fixtures_dir)},
+    )
     return {
         "validation": validation,
-        "imported_event_count": imported_count,
+        "imported_event_count": len(accepted_events),
         "skipped_invalid_event_count": skipped_invalid_count,
+        "batch_count": submission["batch_count"],
+        "batches": submission["batches"],
     }
 
 

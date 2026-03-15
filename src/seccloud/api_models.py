@@ -13,6 +13,22 @@ class Health(ApiSchema):
     status: str
 
 
+class IntakeRequest(ApiSchema):
+    source: str
+    intake_kind: str = "push_gateway"
+    integration_id: str | None = None
+    received_at: str | None = None
+    records: list[dict[str, Any]]
+    metadata: dict[str, Any] | None = None
+
+
+class IntakeAccepted(ApiSchema):
+    batch_id: str
+    source: str
+    record_count: int
+    path: str
+
+
 class EvidencePointer(ApiSchema):
     source: str
     object_key: str
@@ -22,6 +38,8 @@ class EvidencePointer(ApiSchema):
 
 class Principal(ApiSchema):
     id: str
+    entity_id: str
+    entity_key: str
     kind: str
     provider: str
     email: str
@@ -32,6 +50,8 @@ class Principal(ApiSchema):
 
 class Resource(ApiSchema):
     id: str
+    entity_id: str
+    entity_key: str
     kind: str
     provider: str
     name: str
@@ -47,6 +67,8 @@ class Action(ApiSchema):
 
 class Event(ApiSchema):
     event_id: str
+    event_key: str
+    integration_id: str | None = None
     source: str
     source_event_id: str
     principal: Principal
@@ -77,7 +99,8 @@ class Detection(ApiSchema):
 class Pagination(ApiSchema):
     limit: int
     offset: int
-    total: int
+    returned: int
+    total: int | None = None
     has_more: bool
 
 
@@ -148,6 +171,12 @@ class SourceCapabilityDetails(ApiSchema):
     missing_required_event_types: list[str]
     required_field_coverage: dict[str, bool]
     missing_required_fields: list[str]
+    recent_window_anchor_at: str | None = None
+    raw_last_seen_at: str | None = None
+    normalized_last_seen_at: str | None = None
+    raw_24h_count: int
+    normalized_24h_count: int
+    dead_letter_7d_count: int
     raw_event_count: int
     normalized_event_count: int
     dead_letter_count: int
@@ -171,6 +200,24 @@ class StreamAdvance(ApiSchema):
     total_source_events: int
     complete: bool
     batch_size: int
-    ingest: dict[str, Any]
-    detect: dict[str, Any]
-    ops_metadata: OpsMetadata
+    accepted_batches: int
+    accepted_records: int
+    pending_batch_count: int
+
+
+class WorkerState(ApiSchema):
+    normalization_runs: int
+    detection_runs: int
+    source_stats_runs: int
+    projection_runs: int
+    service_runs: int
+    last_submitted_batch_id: str | None = None
+    last_processed_batch_id: str | None = None
+    last_normalization_at: str | None = None
+    last_detection_at: str | None = None
+    last_source_stats_at: str | None = None
+    last_projection_at: str | None = None
+    last_service_at: str | None = None
+    last_service_status: str | None = None
+    pending_batch_count: int
+    processed_batch_count: int

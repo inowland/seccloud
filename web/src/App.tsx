@@ -64,24 +64,27 @@ type SourceCapabilityMatrix = JsonResponse<"/api/source-capability", "get">;
 type SourceCapabilityDetails = components["schemas"]["SourceCapabilityDetails"];
 type Pagination = components["schemas"]["Pagination"];
 type StreamState = components["schemas"]["StreamState"];
+type WorkerState = JsonResponse<"/api/workers/state", "get">;
 
 interface AppData {
   overview: Overview;
   detections: DetectionList;
   events: EventList;
   sourceCapability: SourceCapabilityMatrix;
+  streamState: StreamState;
+  workerState: WorkerState;
 }
 
 interface Counts {
-  events: number;
+  events: number | null;
   detections: number;
   integrations: number;
 }
 
 interface PageMeta {
   title: string;
-  count: number;
-  countLabel: string;
+  count?: number | null;
+  countLabel?: string;
 }
 
 interface PagerProps {
@@ -100,11 +103,13 @@ interface DetailPaneProps {
 interface StreamOverlayProps {
   busy: boolean;
   streamState: StreamState;
+  workerState: WorkerState;
   performAction: (path: string) => Promise<void>;
 }
 
 interface IntegrationDetailPaneProps {
   entry: IntegrationEntry | null;
+  formatObservedAt: (value: string) => string;
   titleHref?: string;
 }
 
@@ -160,10 +165,21 @@ const emptyStreamState: StreamState = {
   total_source_events: 0,
   complete: false,
 };
+const emptyWorkerState: WorkerState = {
+  normalization_runs: 0,
+  detection_runs: 0,
+  source_stats_runs: 0,
+  projection_runs: 0,
+  service_runs: 0,
+  last_source_stats_at: null,
+  pending_batch_count: 0,
+  processed_batch_count: 0,
+};
 const emptyPagination: Pagination = {
   limit: 0,
   offset: 0,
-  total: 0,
+  returned: 0,
+  total: null,
   has_more: false,
 };
 
@@ -199,7 +215,14 @@ async function fetchDashboardData(
   queueOffset: number,
   eventsOffset: number,
 ): Promise<AppData> {
-  const [overview, detections, events, sourceCapability] = await Promise.all([
+  const [
+    overview,
+    detections,
+    events,
+    sourceCapability,
+    streamState,
+    workerState,
+  ] = await Promise.all([
     fetchJson<Overview>("/api/overview"),
     fetchJson<DetectionList>(
       buildListUrl("/api/detections", queuePageSize, queueOffset),
@@ -208,6 +231,8 @@ async function fetchDashboardData(
       buildListUrl("/api/events", eventsPageSize, eventsOffset),
     ),
     fetchJson<SourceCapabilityMatrix>("/api/source-capability"),
+    fetchJson<StreamState>("/api/stream/state"),
+    fetchJson<WorkerState>("/api/workers/state"),
   ]);
 
   return {
@@ -215,6 +240,8 @@ async function fetchDashboardData(
     detections,
     events,
     sourceCapability,
+    streamState,
+    workerState,
   };
 }
 
@@ -225,6 +252,8 @@ function applyDashboardData(
     setDetections: (value: DetectionList) => void;
     setEvents: (value: EventList) => void;
     setSourceCapability: (value: SourceCapabilityMatrix) => void;
+    setStreamState: (value: StreamState) => void;
+    setWorkerState: (value: WorkerState) => void;
     setError: (value: string) => void;
   },
 ) {
@@ -233,6 +262,8 @@ function applyDashboardData(
     actions.setDetections(data.detections);
     actions.setEvents(data.events);
     actions.setSourceCapability(data.sourceCapability);
+    actions.setStreamState(data.streamState);
+    actions.setWorkerState(data.workerState);
   });
   actions.setError("");
 }
@@ -269,7 +300,7 @@ function integrationIssueCount(details: SourceCapabilityDetails): number {
   return (
     details.missing_required_event_types.length +
     details.missing_required_fields.length +
-    details.dead_letter_count
+    details.dead_letter_7d_count
   );
 }
 
@@ -283,18 +314,25 @@ function integrationStatus(details: SourceCapabilityDetails): {
   note: string;
 } {
   const issueCount = integrationIssueCount(details);
-  if (issueCount === 0 && details.normalized_event_count > 0) {
+  if (issueCount === 0 && details.normalized_last_seen_at) {
     return {
       tone: "positive",
       label: "Ready",
-      note: "Contract met and projecting cleanly.",
+      note: "Contract met and normalized data is still arriving.",
     };
   }
-  if (details.normalized_event_count === 0 && details.raw_event_count === 0) {
+  if (!details.raw_last_seen_at && !details.normalized_last_seen_at) {
     return {
       tone: "attention",
       label: "Not seeded",
-      note: "No events have landed for this source yet.",
+      note: "No source activity has landed for this integration yet.",
+    };
+  }
+  if (details.raw_last_seen_at && !details.normalized_last_seen_at) {
+    return {
+      tone: "critical",
+      label: "Blocked",
+      note: "Raw data is arriving but nothing is making it into normalized analytics.",
     };
   }
   return {
@@ -309,11 +347,19 @@ function integrationActionItems(
 ): ActionCard[] {
   const actions: ActionCard[] = [];
 
-  if (details.raw_event_count === 0 && details.normalized_event_count === 0) {
+  if (!details.raw_last_seen_at && !details.normalized_last_seen_at) {
     actions.push({
       title: "Seed or connect the source",
       body: "Nothing has landed yet, so validate the connector and send a small test batch before judging the contract.",
       tone: "attention",
+    });
+  }
+
+  if (details.raw_last_seen_at && !details.normalized_last_seen_at) {
+    actions.push({
+      title: "Restore normalization flow",
+      body: "Raw source activity is landing but nothing is reaching the normalized dataset. Check mapping, validation failures, and worker output before trusting this integration.",
+      tone: "critical",
     });
   }
 
@@ -333,10 +379,10 @@ function integrationActionItems(
     });
   }
 
-  if (details.dead_letter_count > 0) {
+  if (details.dead_letter_7d_count > 0) {
     actions.push({
       title: "Clear dead letters before resync",
-      body: `${formatNumber(details.dead_letter_count)} event(s) failed projection. Inspect the reason counts below, correct the parser or contract, then rerun ingestion for the affected window.`,
+      body: `${formatNumber(details.dead_letter_7d_count)} dead-letter event(s) landed in the latest 7-day slice. Inspect the reason counts below, correct the parser or contract, then rerun ingestion for the affected window.`,
       tone: "critical",
     });
   }
@@ -373,8 +419,6 @@ function pageMeta(page: Page, counts: Counts): PageMeta {
   if (page === "events") {
     return {
       title: "Events",
-      count: counts.events,
-      countLabel: "events",
     };
   }
   if (page === "integrations") {
@@ -670,19 +714,21 @@ function MasterListPane({
 }
 
 function Pager({ page, label, onPrevious, onNext }: PagerProps) {
-  if (page.total === 0) {
+  if (page.returned === 0) {
     return null;
   }
   const start = page.offset + 1;
-  const end = Math.min(page.offset + page.limit, page.total);
+  const end = page.offset + page.returned;
 
   return (
     <div className="pager">
       <div>
         <strong>{label}</strong>
         <span>
-          {formatNumber(start)}-{formatNumber(end)} of{" "}
-          {formatNumber(page.total)}
+          {formatNumber(start)}-{formatNumber(end)}
+          {page.total !== null && page.total !== undefined
+            ? ` of ${formatNumber(page.total)}`
+            : " shown"}
         </span>
       </div>
       <div className="pager__actions">
@@ -757,6 +803,7 @@ function DetailPane({
 
 function IntegrationDetailPane({
   entry,
+  formatObservedAt,
   titleHref,
 }: IntegrationDetailPaneProps) {
   if (!entry) {
@@ -775,6 +822,7 @@ function IntegrationDetailPane({
       <IntegrationDetailContent
         entry={entry}
         formatNumber={formatNumber}
+        formatObservedAt={formatObservedAt}
         integrationActionItems={integrationActionItems}
         integrationCoverageCount={integrationCoverageCount}
         integrationStatus={integrationStatus}
@@ -786,8 +834,14 @@ function IntegrationDetailPane({
 function StreamOverlay({
   busy,
   streamState,
+  workerState,
   performAction,
 }: StreamOverlayProps) {
+  const workerStatus =
+    workerState.pending_batch_count > 0
+      ? `${formatNumber(workerState.pending_batch_count)} pending`
+      : (workerState.last_service_status ?? "idle");
+
   return (
     <div className="stream-overlay">
       <div className="stream-overlay__header">
@@ -802,8 +856,8 @@ function StreamOverlay({
         </span>
       </div>
       <div className="stream-overlay__meta">
-        <span>{formatNumber(streamState.normalized_event_count)} events</span>
         <span>{formatNumber(streamState.detection_count)} detections</span>
+        <span>Worker {workerStatus}</span>
       </div>
       <div className="stream-overlay__actions">
         <button
@@ -854,6 +908,8 @@ export function App() {
   const [queueOffset, setQueueOffset] = useState(0);
   const [eventsOffset, setEventsOffset] = useState(0);
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [streamState, setStreamState] = useState<StreamState>(emptyStreamState);
+  const [workerState, setWorkerState] = useState<WorkerState>(emptyWorkerState);
   const [detections, setDetections] = useState<DetectionList>({
     items: [],
     page: emptyPagination,
@@ -893,6 +949,8 @@ export function App() {
         setDetections,
         setEvents,
         setSourceCapability,
+        setStreamState,
+        setWorkerState,
         setError,
       });
     } catch (loadError) {
@@ -909,6 +967,8 @@ export function App() {
           setDetections,
           setEvents,
           setSourceCapability,
+          setStreamState,
+          setWorkerState,
           setError,
         });
       } catch (loadError) {
@@ -1122,7 +1182,7 @@ export function App() {
         null)
       : null;
   const counts = {
-    events: overview?.stream_state.normalized_event_count ?? 0,
+    events: null,
     detections: overview?.stream_state.detection_count ?? 0,
     integrations: integrationEntries.length,
   };
@@ -1134,7 +1194,6 @@ export function App() {
         : route.kind === "integration"
           ? `Integration - ${route.source}`
           : pageMeta(page, counts).title;
-  const streamState = overview?.stream_state ?? emptyStreamState;
   const navItems = [
     {
       page: "detections" as const,
@@ -1243,6 +1302,7 @@ export function App() {
                   <IntegrationDetailContent
                     entry={routeIntegrationEntry}
                     formatNumber={formatNumber}
+                    formatObservedAt={formatObservedAt}
                     integrationActionItems={integrationActionItems}
                     integrationCoverageCount={integrationCoverageCount}
                     integrationStatus={integrationStatus}
@@ -1558,7 +1618,6 @@ export function App() {
                     <div className="integration-master-list">
                       {filteredIntegrationEntries.map((entry) => {
                         const status = integrationStatus(entry.details);
-                        const issueCount = integrationIssueCount(entry.details);
                         return (
                           <article
                             className={
@@ -1589,19 +1648,20 @@ export function App() {
                               </p>
                               <div className="integration-list-item__stats">
                                 <span>
-                                  {formatNumber(
-                                    entry.details.normalized_event_count,
-                                  )}{" "}
-                                  normalized
+                                  {formatNumber(entry.details.raw_24h_count)}{" "}
+                                  24h landed
                                 </span>
                                 <span>
                                   {formatNumber(
-                                    entry.details.dead_letter_count,
+                                    entry.details.normalized_24h_count,
                                   )}{" "}
-                                  dead letters
+                                  24h normalized
                                 </span>
                                 <span>
-                                  {formatNumber(issueCount)} issue signals
+                                  {formatNumber(
+                                    entry.details.dead_letter_7d_count,
+                                  )}{" "}
+                                  7d dead letters
                                 </span>
                               </div>
                             </button>
@@ -1664,6 +1724,7 @@ export function App() {
                 right={
                   <IntegrationDetailPane
                     entry={selectedIntegrationEntry}
+                    formatObservedAt={formatObservedAt}
                     titleHref={
                       selectedIntegrationEntry
                         ? routeToHref({
@@ -1761,9 +1822,11 @@ export function App() {
                         <span className="app-sidebar__nav-label">
                           {item.label}
                         </span>
-                        <span className="app-sidebar__nav-count">
-                          {formatNumber(item.count)}
-                        </span>
+                        {item.count !== null && item.count !== undefined ? (
+                          <span className="app-sidebar__nav-count">
+                            {formatNumber(item.count)}
+                          </span>
+                        ) : null}
                       </>
                     ) : null}
                   </button>
@@ -1778,6 +1841,7 @@ export function App() {
       <StreamOverlay
         busy={busy}
         streamState={streamState}
+        workerState={workerState}
         performAction={performAction}
       />
     </div>

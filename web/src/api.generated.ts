@@ -21,6 +21,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/intake/raw-events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Intake Raw Events */
+    post: operations["intake_raw_events_api_intake_raw_events_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workers/state": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Worker State */
+    get: operations["worker_state_api_workers_state_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/stream/reset": {
     parameters: {
       query?: never;
@@ -260,6 +294,10 @@ export interface components {
     Event: {
       /** Event Id */
       event_id: string;
+      /** Event Key */
+      event_key: string;
+      /** Integration Id */
+      integration_id?: string | null;
       /** Source */
       source: string;
       /** Source Event Id */
@@ -316,6 +354,39 @@ export interface components {
       /** Status */
       status: string;
     };
+    /** IntakeAccepted */
+    IntakeAccepted: {
+      /** Batch Id */
+      batch_id: string;
+      /** Source */
+      source: string;
+      /** Record Count */
+      record_count: number;
+      /** Path */
+      path: string;
+    };
+    /** IntakeRequest */
+    IntakeRequest: {
+      /** Source */
+      source: string;
+      /**
+       * Intake Kind
+       * @default push_gateway
+       */
+      intake_kind: string;
+      /** Integration Id */
+      integration_id?: string | null;
+      /** Received At */
+      received_at?: string | null;
+      /** Records */
+      records: {
+        [key: string]: unknown;
+      }[];
+      /** Metadata */
+      metadata?: {
+        [key: string]: unknown;
+      } | null;
+    };
     /** OpsMetadata */
     OpsMetadata: {
       /** Workspace */
@@ -344,8 +415,10 @@ export interface components {
       limit: number;
       /** Offset */
       offset: number;
+      /** Returned */
+      returned: number;
       /** Total */
-      total: number;
+      total?: number | null;
       /** Has More */
       has_more: boolean;
     };
@@ -353,6 +426,10 @@ export interface components {
     Principal: {
       /** Id */
       id: string;
+      /** Entity Id */
+      entity_id: string;
+      /** Entity Key */
+      entity_key: string;
       /** Kind */
       kind: string;
       /** Provider */
@@ -372,6 +449,10 @@ export interface components {
     Resource: {
       /** Id */
       id: string;
+      /** Entity Id */
+      entity_id: string;
+      /** Entity Key */
+      entity_key: string;
       /** Kind */
       kind: string;
       /** Provider */
@@ -403,6 +484,18 @@ export interface components {
       };
       /** Missing Required Fields */
       missing_required_fields: string[];
+      /** Recent Window Anchor At */
+      recent_window_anchor_at?: string | null;
+      /** Raw Last Seen At */
+      raw_last_seen_at?: string | null;
+      /** Normalized Last Seen At */
+      normalized_last_seen_at?: string | null;
+      /** Raw 24H Count */
+      raw_24h_count: number;
+      /** Normalized 24H Count */
+      normalized_24h_count: number;
+      /** Dead Letter 7D Count */
+      dead_letter_7d_count: number;
       /** Raw Event Count */
       raw_event_count: number;
       /** Normalized Event Count */
@@ -435,15 +528,12 @@ export interface components {
       complete: boolean;
       /** Batch Size */
       batch_size: number;
-      /** Ingest */
-      ingest: {
-        [key: string]: unknown;
-      };
-      /** Detect */
-      detect: {
-        [key: string]: unknown;
-      };
-      ops_metadata: components["schemas"]["OpsMetadata"];
+      /** Accepted Batches */
+      accepted_batches: number;
+      /** Accepted Records */
+      accepted_records: number;
+      /** Pending Batch Count */
+      pending_batch_count: number;
     };
     /** StreamReset */
     StreamReset: {
@@ -480,6 +570,39 @@ export interface components {
       /** Context */
       ctx?: Record<string, never>;
     };
+    /** WorkerState */
+    WorkerState: {
+      /** Normalization Runs */
+      normalization_runs: number;
+      /** Detection Runs */
+      detection_runs: number;
+      /** Source Stats Runs */
+      source_stats_runs: number;
+      /** Projection Runs */
+      projection_runs: number;
+      /** Service Runs */
+      service_runs: number;
+      /** Last Submitted Batch Id */
+      last_submitted_batch_id?: string | null;
+      /** Last Processed Batch Id */
+      last_processed_batch_id?: string | null;
+      /** Last Normalization At */
+      last_normalization_at?: string | null;
+      /** Last Detection At */
+      last_detection_at?: string | null;
+      /** Last Source Stats At */
+      last_source_stats_at?: string | null;
+      /** Last Projection At */
+      last_projection_at?: string | null;
+      /** Last Service At */
+      last_service_at?: string | null;
+      /** Last Service Status */
+      last_service_status?: string | null;
+      /** Pending Batch Count */
+      pending_batch_count: number;
+      /** Processed Batch Count */
+      processed_batch_count: number;
+    };
   };
   responses: never;
   parameters: never;
@@ -505,6 +628,59 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Health"];
+        };
+      };
+    };
+  };
+  intake_raw_events_api_intake_raw_events_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["IntakeRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IntakeAccepted"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  worker_state_api_workers_state_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkerState"];
         };
       };
     };

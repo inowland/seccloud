@@ -124,6 +124,7 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
 def fetch_projection_overview(dsn: str | None = None) -> dict[str, Any]:
     dsn = dsn or default_projection_dsn()
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        ensure_projection_schema(conn)
         with conn.cursor() as cur:
             cur.execute(f"select payload from {PROJECTION_STATE_TABLE} where key = 'stream_state'")
             stream_state = cur.fetchone()
@@ -152,25 +153,36 @@ def _paginate_rows(
     order_by: str,
     limit: int,
     offset: int,
+    *,
+    include_total: bool = True,
     dsn: str | None = None,
 ) -> dict[str, Any]:
     dsn = dsn or default_projection_dsn()
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        ensure_projection_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(f"select count(*) as count from {table}")
-            total = cur.fetchone()["count"]
+            total = None
+            if include_total:
+                cur.execute(f"select count(*) as count from {table}")
+                total = cur.fetchone()["count"]
+                query_limit = limit
+            else:
+                query_limit = limit + 1
             cur.execute(
                 f"select payload from {table} order by {order_by} desc limit %s offset %s",
-                (limit, offset),
+                (query_limit, offset),
             )
-            items = [row["payload"] for row in cur.fetchall()]
+            rows = [row["payload"] for row in cur.fetchall()]
+            has_more = offset + len(rows) < total if total is not None else len(rows) > limit
+            items = rows[:limit]
     return {
         "items": items,
         "page": {
             "limit": limit,
             "offset": offset,
+            "returned": len(items),
             "total": total,
-            "has_more": offset + len(items) < total,
+            "has_more": has_more,
         },
     }
 
@@ -185,6 +197,7 @@ def fetch_projected_events(
         order_by="observed_at",
         limit=limit,
         offset=offset,
+        include_total=False,
         dsn=dsn,
     )
 

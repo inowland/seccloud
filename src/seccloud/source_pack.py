@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from datetime import timedelta
 from typing import Any
 
-from seccloud.storage import Workspace
+from seccloud.stats_projector import rebuild_source_stats
+from seccloud.storage import Workspace, parse_timestamp
 
 SOURCE_CAPABILITY_CONTRACT: dict[str, dict[str, Any]] = {
     "okta": {
@@ -29,28 +30,37 @@ SOURCE_CAPABILITY_CONTRACT: dict[str, dict[str, Any]] = {
 }
 
 
+def _count_recent_buckets(buckets: dict[str, int], anchor: str | None, *, days: int) -> int:
+    if anchor is None:
+        return 0
+    anchor_date = parse_timestamp(anchor).date()
+    window_dates = {(anchor_date - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(days)}
+    return sum(count for bucket, count in buckets.items() if bucket in window_dates)
+
+
 def build_source_capability_matrix(workspace: Workspace) -> dict[str, Any]:
-    raw_events = workspace.list_raw_events()
-    normalized_events = workspace.list_normalized_events()
-    dead_letters = workspace.list_dead_letters()
-
-    raw_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    normalized_by_source = Counter(item["source"] for item in normalized_events)
-    dead_letters_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
-
-    for raw_event in raw_events:
-        raw_by_source[raw_event["source"]].append(raw_event)
-    for dead_letter in dead_letters:
-        dead_letters_by_source[dead_letter["source"]].append(dead_letter)
+    source_stats = workspace.load_source_stats().get("sources", {})
+    if not source_stats and (
+        workspace.list_raw_events() or workspace.list_normalized_events() or workspace.list_dead_letters()
+    ):
+        rebuild_source_stats(workspace)
+        source_stats = workspace.load_source_stats().get("sources", {})
 
     sources: dict[str, Any] = {}
     for source, contract in SOURCE_CAPABILITY_CONTRACT.items():
-        source_raw_events = raw_by_source.get(source, [])
-        seen_event_types = sorted({item.get("event_type", "unknown") for item in source_raw_events})
+        stats = source_stats.get(source, {})
+        seen_event_types = sorted(stats.get("seen_event_types", []))
         required_event_types = contract["required_event_types"]
         required_fields = contract["required_fields"]
-        field_coverage = {field: any(field in item for item in source_raw_events) for field in required_fields}
-        dead_letter_reason_counts = dict(Counter(item["reason"] for item in dead_letters_by_source.get(source, [])))
+        seen_raw_fields = set(stats.get("seen_raw_fields", []))
+        field_coverage = {field: field in seen_raw_fields for field in required_fields}
+        dead_letter_reason_counts = stats.get("dead_letter_reason_counts", {})
+        raw_last_seen_at = stats.get("raw_last_seen_at")
+        normalized_last_seen_at = stats.get("normalized_last_seen_at")
+        recent_window_anchor_at = stats.get("recent_window_anchor_at")
+        raw_daily_counts = stats.get("raw_daily_counts", {})
+        normalized_daily_counts = stats.get("normalized_daily_counts", {})
+        dead_letter_daily_counts = stats.get("dead_letter_daily_counts", {})
         sources[source] = {
             "display_name": contract["display_name"],
             "required_event_types": required_event_types,
@@ -59,9 +69,23 @@ def build_source_capability_matrix(workspace: Workspace) -> dict[str, Any]:
             "missing_required_event_types": sorted(set(required_event_types) - set(seen_event_types)),
             "required_field_coverage": field_coverage,
             "missing_required_fields": sorted(field for field, covered in field_coverage.items() if not covered),
-            "raw_event_count": len(source_raw_events),
-            "normalized_event_count": normalized_by_source.get(source, 0),
-            "dead_letter_count": len(dead_letters_by_source.get(source, [])),
+            "recent_window_anchor_at": recent_window_anchor_at,
+            "raw_last_seen_at": raw_last_seen_at,
+            "normalized_last_seen_at": normalized_last_seen_at,
+            "raw_24h_count": _count_recent_buckets(raw_daily_counts, recent_window_anchor_at, days=1),
+            "normalized_24h_count": _count_recent_buckets(
+                normalized_daily_counts,
+                recent_window_anchor_at,
+                days=1,
+            ),
+            "dead_letter_7d_count": _count_recent_buckets(
+                dead_letter_daily_counts,
+                recent_window_anchor_at,
+                days=7,
+            ),
+            "raw_event_count": stats.get("raw_event_count", 0),
+            "normalized_event_count": stats.get("normalized_event_count", 0),
+            "dead_letter_count": stats.get("dead_letter_count", 0),
             "dead_letter_reason_counts": dead_letter_reason_counts,
         }
 
@@ -88,8 +112,12 @@ def build_source_capability_markdown(workspace: Workspace) -> str:
         lines.extend(
             [
                 f"### {details['display_name']} (`{source}`)",
-                f"- Raw events: `{details['raw_event_count']}`",
-                f"- Normalized events: `{details['normalized_event_count']}`",
+                f"- Recent window anchor: `{details['recent_window_anchor_at']}`",
+                f"- Last raw seen: `{details['raw_last_seen_at']}`",
+                f"- Last normalized seen: `{details['normalized_last_seen_at']}`",
+                f"- Raw events in latest 24h slice: `{details['raw_24h_count']}`",
+                f"- Normalized events in latest 24h slice: `{details['normalized_24h_count']}`",
+                f"- Dead letters in latest 7d slice: `{details['dead_letter_7d_count']}`",
                 f"- Dead letters: `{details['dead_letter_count']}`",
                 f"- Required event types: `{details['required_event_types']}`",
                 f"- Seen event types: `{details['seen_event_types']}`",

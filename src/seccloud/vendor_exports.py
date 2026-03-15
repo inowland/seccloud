@@ -7,6 +7,7 @@ from typing import Any
 from seccloud.onboarding import build_source_manifest
 from seccloud.pipeline import validate_raw_event
 from seccloud.storage import Workspace
+from seccloud.workers import submit_grouped_raw_events
 
 
 class VendorMappingError(ValueError):
@@ -263,7 +264,7 @@ def validate_vendor_fixture_bundle(fixtures_dir: str | Path) -> dict[str, Any]:
 
 def import_vendor_fixture_bundle(workspace: Workspace, fixtures_dir: str | Path) -> dict[str, Any]:
     validation = validate_vendor_fixture_bundle(fixtures_dir)
-    imported_count = 0
+    accepted_events: list[dict[str, Any]] = []
     skipped_invalid_count = 0
     manifest = build_vendor_source_manifest()
     for source_manifest in manifest["sources"]:
@@ -278,12 +279,20 @@ def import_vendor_fixture_bundle(workspace: Workspace, fixtures_dir: str | Path)
                 skipped_invalid_count += 1
                 continue
             mapped = map_vendor_event(source, event)
-            workspace.write_raw_event(source, mapped)
-            imported_count += 1
+            accepted_events.append(mapped)
+    submission = submit_grouped_raw_events(
+        workspace,
+        records=accepted_events,
+        intake_kind="vendor_fixture_import",
+        integration_id="vendor-fixtures",
+        metadata={"fixtures_dir": str(fixtures_dir)},
+    )
     return {
         "validation": validation,
-        "imported_event_count": imported_count,
+        "imported_event_count": len(accepted_events),
         "skipped_invalid_event_count": skipped_invalid_count,
+        "batch_count": submission["batch_count"],
+        "batches": submission["batches"],
         "mapping_target": build_source_manifest()["mapping_version"],
     }
 

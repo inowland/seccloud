@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from pathlib import Path
-from threading import Lock
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,11 +12,14 @@ from seccloud.api_models import (
     Event,
     EventList,
     Health,
+    IntakeAccepted,
+    IntakeRequest,
     Overview,
     SourceCapabilityMatrix,
     StreamAdvance,
     StreamReset,
     StreamState,
+    WorkerState,
 )
 from seccloud.defaults import DEFAULT_WORKSPACE
 from seccloud.investigation import (
@@ -27,12 +27,10 @@ from seccloud.investigation import (
     get_event_detail,
 )
 from seccloud.local_postgres import local_postgres_dsn
-from seccloud.pipeline import collect_ops_metadata
 from seccloud.projection_store import (
     fetch_projected_detections,
     fetch_projected_events,
     fetch_projection_overview,
-    sync_workspace_projection,
 )
 from seccloud.runtime_stream import (
     advance_runtime_stream,
@@ -41,8 +39,10 @@ from seccloud.runtime_stream import (
 )
 from seccloud.source_pack import build_source_capability_matrix
 from seccloud.storage import Workspace
-
-projection_sync_lock = Lock()
+from seccloud.workers import (
+    get_worker_state,
+    submit_raw_events,
+)
 
 
 def create_app() -> FastAPI:
@@ -54,18 +54,7 @@ def create_app() -> FastAPI:
         ws.bootstrap()
         return ws
 
-    def sync_projection(ws: Workspace) -> dict:
-        with projection_sync_lock:
-            if not ws.load_ops_metadata():
-                collect_ops_metadata(ws)
-            return sync_workspace_projection(ws, dsn)
-
-    @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        sync_projection(workspace())
-        yield
-
-    app = FastAPI(title="Seccloud API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Seccloud API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -77,19 +66,40 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.post("/api/intake/raw-events", response_model=IntakeAccepted, status_code=202)
+    def intake_raw_events(request: IntakeRequest) -> dict:
+        ws = workspace()
+        records: list[dict[str, object]] = []
+        for record in request.records:
+            if "source" in record and record["source"] != request.source:
+                raise HTTPException(
+                    status_code=400,
+                    detail="All records in an intake batch must match the request source.",
+                )
+            records.append({"source": request.source, **record})
+        return submit_raw_events(
+            ws,
+            source=request.source,
+            records=records,
+            intake_kind=request.intake_kind,
+            integration_id=request.integration_id,
+            received_at=request.received_at,
+            metadata=request.metadata,
+        )
+
+    @app.get("/api/workers/state", response_model=WorkerState)
+    def worker_state() -> dict:
+        return get_worker_state(workspace())
+
     @app.post("/api/stream/reset", response_model=StreamReset)
     def stream_reset() -> dict:
         ws = workspace()
-        result = initialize_runtime_stream(ws)
-        sync_projection(ws)
-        return result
+        return initialize_runtime_stream(ws)
 
     @app.post("/api/stream/advance", response_model=StreamAdvance)
     def stream_advance(batch_size: int = Query(default=5, ge=1, le=50)) -> dict:
         ws = workspace()
-        result = advance_runtime_stream(ws, batch_size=batch_size)
-        sync_projection(ws)
-        return result
+        return advance_runtime_stream(ws, batch_size=batch_size)
 
     @app.get("/api/stream/state", response_model=StreamState)
     def stream_state() -> dict:

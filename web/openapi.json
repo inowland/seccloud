@@ -23,6 +23,62 @@
         }
       }
     },
+    "/api/intake/raw-events": {
+      "post": {
+        "summary": "Intake Raw Events",
+        "operationId": "intake_raw_events_api_intake_raw_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeAccepted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workers/state": {
+      "get": {
+        "summary": "Worker State",
+        "operationId": "worker_state_api_workers_state_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/stream/reset": {
       "post": {
         "summary": "Stream Reset",
@@ -553,6 +609,21 @@
             "type": "string",
             "title": "Event Id"
           },
+          "event_key": {
+            "type": "string",
+            "title": "Event Key"
+          },
+          "integration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Id"
+          },
           "source": {
             "type": "string",
             "title": "Source"
@@ -592,6 +663,7 @@
         "type": "object",
         "required": [
           "event_id",
+          "event_key",
           "source",
           "source_event_id",
           "principal",
@@ -698,6 +770,89 @@
         "required": ["status"],
         "title": "Health"
       },
+      "IntakeAccepted": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "title": "Batch Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "record_count": {
+            "type": "integer",
+            "title": "Record Count"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["batch_id", "source", "record_count", "path"],
+        "title": "IntakeAccepted"
+      },
+      "IntakeRequest": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "intake_kind": {
+            "type": "string",
+            "title": "Intake Kind",
+            "default": "push_gateway"
+          },
+          "integration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Id"
+          },
+          "received_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Received At"
+          },
+          "records": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Records"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["source", "records"],
+        "title": "IntakeRequest"
+      },
       "OpsMetadata": {
         "properties": {
           "workspace": {
@@ -777,8 +932,19 @@
             "type": "integer",
             "title": "Offset"
           },
-          "total": {
+          "returned": {
             "type": "integer",
+            "title": "Returned"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Total"
           },
           "has_more": {
@@ -788,7 +954,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["limit", "offset", "total", "has_more"],
+        "required": ["limit", "offset", "returned", "has_more"],
         "title": "Pagination"
       },
       "Principal": {
@@ -796,6 +962,14 @@
           "id": {
             "type": "string",
             "title": "Id"
+          },
+          "entity_id": {
+            "type": "string",
+            "title": "Entity Id"
+          },
+          "entity_key": {
+            "type": "string",
+            "title": "Entity Key"
           },
           "kind": {
             "type": "string",
@@ -827,6 +1001,8 @@
         "type": "object",
         "required": [
           "id",
+          "entity_id",
+          "entity_key",
           "kind",
           "provider",
           "email",
@@ -841,6 +1017,14 @@
           "id": {
             "type": "string",
             "title": "Id"
+          },
+          "entity_id": {
+            "type": "string",
+            "title": "Entity Id"
+          },
+          "entity_key": {
+            "type": "string",
+            "title": "Entity Key"
           },
           "kind": {
             "type": "string",
@@ -868,6 +1052,8 @@
         "type": "object",
         "required": [
           "id",
+          "entity_id",
+          "entity_key",
           "kind",
           "provider",
           "name",
@@ -924,6 +1110,51 @@
             "type": "array",
             "title": "Missing Required Fields"
           },
+          "recent_window_anchor_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Window Anchor At"
+          },
+          "raw_last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Last Seen At"
+          },
+          "normalized_last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Last Seen At"
+          },
+          "raw_24h_count": {
+            "type": "integer",
+            "title": "Raw 24H Count"
+          },
+          "normalized_24h_count": {
+            "type": "integer",
+            "title": "Normalized 24H Count"
+          },
+          "dead_letter_7d_count": {
+            "type": "integer",
+            "title": "Dead Letter 7D Count"
+          },
           "raw_event_count": {
             "type": "integer",
             "title": "Raw Event Count"
@@ -954,6 +1185,9 @@
           "missing_required_event_types",
           "required_field_coverage",
           "missing_required_fields",
+          "raw_24h_count",
+          "normalized_24h_count",
+          "dead_letter_7d_count",
           "raw_event_count",
           "normalized_event_count",
           "dead_letter_count",
@@ -1005,18 +1239,17 @@
             "type": "integer",
             "title": "Batch Size"
           },
-          "ingest": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Ingest"
+          "accepted_batches": {
+            "type": "integer",
+            "title": "Accepted Batches"
           },
-          "detect": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Detect"
+          "accepted_records": {
+            "type": "integer",
+            "title": "Accepted Records"
           },
-          "ops_metadata": {
-            "$ref": "#/components/schemas/OpsMetadata"
+          "pending_batch_count": {
+            "type": "integer",
+            "title": "Pending Batch Count"
           }
         },
         "additionalProperties": false,
@@ -1027,9 +1260,9 @@
           "total_source_events",
           "complete",
           "batch_size",
-          "ingest",
-          "detect",
-          "ops_metadata"
+          "accepted_batches",
+          "accepted_records",
+          "pending_batch_count"
         ],
         "title": "StreamAdvance"
       },
@@ -1130,6 +1363,138 @@
         "type": "object",
         "required": ["loc", "msg", "type"],
         "title": "ValidationError"
+      },
+      "WorkerState": {
+        "properties": {
+          "normalization_runs": {
+            "type": "integer",
+            "title": "Normalization Runs"
+          },
+          "detection_runs": {
+            "type": "integer",
+            "title": "Detection Runs"
+          },
+          "source_stats_runs": {
+            "type": "integer",
+            "title": "Source Stats Runs"
+          },
+          "projection_runs": {
+            "type": "integer",
+            "title": "Projection Runs"
+          },
+          "service_runs": {
+            "type": "integer",
+            "title": "Service Runs"
+          },
+          "last_submitted_batch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Submitted Batch Id"
+          },
+          "last_processed_batch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Processed Batch Id"
+          },
+          "last_normalization_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Normalization At"
+          },
+          "last_detection_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Detection At"
+          },
+          "last_source_stats_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Source Stats At"
+          },
+          "last_projection_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Projection At"
+          },
+          "last_service_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Service At"
+          },
+          "last_service_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Service Status"
+          },
+          "pending_batch_count": {
+            "type": "integer",
+            "title": "Pending Batch Count"
+          },
+          "processed_batch_count": {
+            "type": "integer",
+            "title": "Processed Batch Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "normalization_runs",
+          "detection_runs",
+          "source_stats_runs",
+          "projection_runs",
+          "service_runs",
+          "pending_batch_count",
+          "processed_batch_count"
+        ],
+        "title": "WorkerState"
       }
     }
   }

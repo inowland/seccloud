@@ -17,6 +17,8 @@ def _serialize(value: Any) -> Any:
 @dataclass(slots=True)
 class Principal:
     id: str
+    entity_id: str
+    entity_key: str
     kind: str
     provider: str
     email: str
@@ -31,6 +33,8 @@ class Principal:
 @dataclass(slots=True)
 class Resource:
     id: str
+    entity_id: str
+    entity_key: str
     kind: str
     provider: str
     name: str
@@ -63,8 +67,35 @@ class EvidencePointer:
 
 
 @dataclass(slots=True)
+class RawIntakeBatch:
+    batch_id: str
+    intake_kind: str
+    source: str
+    received_at: str
+    records: list[dict[str, Any]]
+    integration_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = "raw-intake-batch-v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "batch_id": self.batch_id,
+            "schema_version": self.schema_version,
+            "intake_kind": self.intake_kind,
+            "source": self.source,
+            "integration_id": self.integration_id,
+            "received_at": self.received_at,
+            "record_count": len(self.records),
+            "records": self.records,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
 class Event:
     event_id: str
+    event_key: str
+    integration_id: str | None
     source: str
     source_event_id: str
     principal: Principal
@@ -78,6 +109,8 @@ class Event:
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
+            "event_key": self.event_key,
+            "integration_id": self.integration_id,
             "source": self.source,
             "source_event_id": self.source_event_id,
             "principal": self.principal.to_dict(),

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
 
 from seccloud.contracts import Case
+from seccloud.ids import new_prefixed_id
 from seccloud.storage import Workspace, parse_timestamp
 
 
@@ -173,7 +173,7 @@ def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[
         _persist_case_artifact(workspace, groupable_case)
         return groupable_case
     case = Case(
-        case_id=f"case-{uuid4().hex[:12]}",
+        case_id=new_prefixed_id("cas"),
         detection_ids=[detection_id],
         timeline_event_ids=timeline,
         evidence_snapshots=evidence_snapshots,

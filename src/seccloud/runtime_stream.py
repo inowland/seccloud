@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from seccloud.pipeline import (
-    build_derived_state_and_detections,
-    collect_ops_metadata,
-    ingest_raw_events,
-)
 from seccloud.storage import Workspace, format_timestamp, parse_timestamp, read_json, write_json
 from seccloud.synthetic import generate_synthetic_dataset
+from seccloud.workers import submit_grouped_raw_events
 
 
 def _stream_manifest_path(workspace: Workspace):
@@ -87,6 +83,7 @@ def initialize_runtime_stream(workspace: Workspace) -> dict[str, Any]:
         },
     )
     write_json(workspace.manifests_dir / "runtime_stream_source_events.json", seed)
+    workspace.request_projection_refresh()
     return {
         "status": "initialized",
         "total_source_events": len(source_events),
@@ -107,12 +104,15 @@ def advance_runtime_stream(workspace: Workspace, batch_size: int = 5) -> dict[st
     cursor = manifest["cursor"]
     next_cursor = min(cursor + batch_size, len(source_events))
     batch = source_events[cursor:next_cursor]
-    for raw_event in batch:
-        workspace.write_raw_event(raw_event["source"], raw_event)
-
-    ingest = ingest_raw_events(workspace)
-    detect = build_derived_state_and_detections(workspace)
-    ops = collect_ops_metadata(workspace)
+    accepted = {"batch_count": 0, "record_count": 0, "batches": []}
+    if batch:
+        accepted = submit_grouped_raw_events(
+            workspace,
+            records=batch,
+            intake_kind="runtime_stream",
+            integration_id="synthetic-stream",
+            metadata={"cursor_start": cursor, "cursor_end": next_cursor},
+        )
 
     manifest.update(
         {
@@ -128,9 +128,9 @@ def advance_runtime_stream(workspace: Workspace, batch_size: int = 5) -> dict[st
         "total_source_events": len(source_events),
         "complete": manifest["complete"],
         "batch_size": len(batch),
-        "ingest": ingest,
-        "detect": detect,
-        "ops_metadata": ops,
+        "accepted_batches": accepted["batch_count"],
+        "accepted_records": accepted["record_count"],
+        "pending_batch_count": len(workspace.list_pending_intake_batches()),
     }
 
 

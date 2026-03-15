@@ -45,6 +45,7 @@ interface EventDetailContentProps {
 interface IntegrationDetailContentProps {
   entry: IntegrationEntry;
   formatNumber: (value: number | undefined) => string;
+  formatObservedAt: (value: string) => string;
   integrationActionItems: (details: SourceCapabilityDetails) => ActionCard[];
   integrationCoverageCount: (details: SourceCapabilityDetails) => number;
   integrationStatus: (details: SourceCapabilityDetails) => {
@@ -211,6 +212,7 @@ export function EventDetailContent({
 export function IntegrationDetailContent({
   entry,
   formatNumber,
+  formatObservedAt,
   integrationActionItems,
   integrationCoverageCount,
   integrationStatus,
@@ -234,19 +236,25 @@ export function IntegrationDetailContent({
       </div>
 
       <div className="panel-note">{status.note}</div>
+      <div className="panel-note">
+        Window anchor:{" "}
+        {details.recent_window_anchor_at
+          ? formatObservedAt(details.recent_window_anchor_at)
+          : "Waiting for source activity."}
+      </div>
 
       <div className="mini-metrics">
         <div className="mini-metric">
-          <span>Raw events</span>
-          <strong>{formatNumber(details.raw_event_count)}</strong>
+          <span>24h landed</span>
+          <strong>{formatNumber(details.raw_24h_count)}</strong>
         </div>
         <div className="mini-metric">
-          <span>Normalized</span>
-          <strong>{formatNumber(details.normalized_event_count)}</strong>
+          <span>24h normalized</span>
+          <strong>{formatNumber(details.normalized_24h_count)}</strong>
         </div>
         <div className="mini-metric">
-          <span>Dead letters</span>
-          <strong>{formatNumber(details.dead_letter_count)}</strong>
+          <span>7d dead letters</span>
+          <strong>{formatNumber(details.dead_letter_7d_count)}</strong>
         </div>
         <div className="mini-metric">
           <span>Field coverage</span>
@@ -334,10 +342,30 @@ export function IntegrationDetailContent({
           subtitle="What the runtime has actually seen from this source."
         >
           <div>
+            <span className="detail-label">Recent activity</span>
+            <div className="token-row">
+              <span className="token token--muted">
+                Last raw:{" "}
+                {details.raw_last_seen_at
+                  ? formatObservedAt(details.raw_last_seen_at)
+                  : "waiting"}
+              </span>
+              <span className="token token--muted">
+                Last normalized:{" "}
+                {details.normalized_last_seen_at
+                  ? formatObservedAt(details.normalized_last_seen_at)
+                  : "waiting"}
+              </span>
+            </div>
+          </div>
+
+          <div>
             <span className="detail-label">Seen event types</span>
             <div className="token-row">
               {details.seen_event_types.length === 0 ? (
-                <span className="token token--muted">No events seen yet</span>
+                <span className="token token--muted">
+                  No source activity seen yet
+                </span>
               ) : (
                 details.seen_event_types.map((eventType) => (
                   <span className="token token--muted" key={eventType}>

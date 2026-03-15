@@ -28,14 +28,11 @@ from seccloud.onboarding import (
     validate_fixture_bundle,
 )
 from seccloud.pipeline import (
-    build_derived_state_and_detections,
     collect_ops_metadata,
-    ingest_raw_events,
     rebuild_derived_state,
     run_runtime,
     seed_workspace,
 )
-from seccloud.projection_store import sync_workspace_projection
 from seccloud.reports import (
     build_conversation_pack_markdown,
     export_founder_artifacts,
@@ -54,6 +51,12 @@ from seccloud.vendor_exports import (
     import_vendor_fixture_bundle,
     validate_vendor_fixture_bundle,
 )
+from seccloud.workers import (
+    get_worker_state,
+    run_source_stats_projector,
+    run_worker_service_loop,
+    run_worker_service_once,
+)
 
 
 def _print(payload: Any) -> None:
@@ -61,7 +64,10 @@ def _print(payload: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="seccloud")
+    parser = argparse.ArgumentParser(
+        prog="seccloud",
+        description="Seccloud development and operator CLI.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_workspace_argument(command: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -69,7 +75,36 @@ def build_parser() -> argparse.ArgumentParser:
         return command
 
     add_workspace_argument(subparsers.add_parser("seed-data"))
-    add_workspace_argument(subparsers.add_parser("run-pipeline"))
+    service_once = add_workspace_argument(
+        subparsers.add_parser(
+            "run-worker-service-once",
+            help="Operator-only: drain pending intake once and refresh projections if needed.",
+        )
+    )
+    service_once.add_argument("--dsn")
+    service_once.add_argument("--max-batches", type=int)
+    service_loop = add_workspace_argument(
+        subparsers.add_parser(
+            "run-worker-service",
+            help="Operator-only: run the background worker loop.",
+        )
+    )
+    service_loop.add_argument("--dsn")
+    service_loop.add_argument("--poll-interval-seconds", type=float, default=1.0)
+    service_loop.add_argument("--max-batches", type=int)
+    service_loop.add_argument("--iterations", type=int)
+    add_workspace_argument(
+        subparsers.add_parser(
+            "show-worker-state",
+            help="Operator-only: inspect worker service state.",
+        )
+    )
+    add_workspace_argument(
+        subparsers.add_parser(
+            "run-source-stats-projector",
+            help="Operator-only: rebuild source stats from persisted workspace events.",
+        )
+    )
     add_workspace_argument(subparsers.add_parser("run-runtime"))
     add_workspace_argument(subparsers.add_parser("list-detections"))
 
@@ -134,10 +169,6 @@ def build_parser() -> argparse.ArgumentParser:
     stream_state = add_workspace_argument(subparsers.add_parser("stream-state"))
     stream_state.set_defaults(workspace=DEFAULT_WORKSPACE)
 
-    sync_projection = add_workspace_argument(subparsers.add_parser("sync-projection"))
-    sync_projection.set_defaults(workspace=DEFAULT_WORKSPACE)
-    sync_projection.add_argument("--dsn")
-
     subparsers.add_parser("init-postgres")
     subparsers.add_parser("start-postgres")
     subparsers.add_parser("stop-postgres")
@@ -158,12 +189,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "seed-data":
         assert workspace is not None
         _print(seed_workspace(workspace))
-    elif args.command == "run-pipeline":
+    elif args.command == "run-worker-service-once":
         assert workspace is not None
-        ingest = ingest_raw_events(workspace)
-        detect = build_derived_state_and_detections(workspace)
-        ops = collect_ops_metadata(workspace)
-        _print({"ingest": ingest, "detect": detect, "ops_metadata": ops})
+        _print(
+            run_worker_service_once(
+                workspace,
+                dsn=args.dsn or local_postgres_dsn("."),
+                max_batches=args.max_batches,
+            )
+        )
+    elif args.command == "run-worker-service":
+        assert workspace is not None
+        _print(
+            run_worker_service_loop(
+                workspace,
+                dsn=args.dsn or local_postgres_dsn("."),
+                poll_interval_seconds=args.poll_interval_seconds,
+                max_batches=args.max_batches,
+                max_iterations=args.iterations,
+            )
+        )
+    elif args.command == "show-worker-state":
+        assert workspace is not None
+        _print(get_worker_state(workspace))
+    elif args.command == "run-source-stats-projector":
+        assert workspace is not None
+        _print(run_source_stats_projector(workspace))
     elif args.command == "run-runtime":
         assert workspace is not None
         result = run_runtime(workspace)
@@ -250,9 +301,6 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "stream-state":
         assert workspace is not None
         _print(get_runtime_stream_state(workspace))
-    elif args.command == "sync-projection":
-        assert workspace is not None
-        _print(sync_workspace_projection(workspace, args.dsn or local_postgres_dsn(".")))
     elif args.command == "init-postgres":
         _print(init_local_postgres("."))
     elif args.command == "start-postgres":

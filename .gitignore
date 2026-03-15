@@ -9,4 +9,6 @@ web-dist/
 .uv-cache/
 .python-version
 .seccloud/
+examples/poc/runtime/
+examples/poc/demo-runtime/
 examples/poc/demo-runtime-check/

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import argparse
 import json
 import os
 import shutil
@@ -17,6 +17,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import seccloud.api as seccloud_api
+from seccloud.cli import build_parser
 from seccloud.investigation import (
     build_evidence_bundle,
     build_peer_comparison,
@@ -59,6 +60,17 @@ from seccloud.vendor_exports import (
     build_vendor_source_manifest,
     import_vendor_fixture_bundle,
     validate_vendor_fixture_bundle,
+)
+from seccloud.workers import (
+    get_worker_state,
+    run_all_local_workers,
+    run_local_processing_workers,
+    run_normalization_worker,
+    run_projector_worker,
+    run_source_stats_projector,
+    run_worker_service_loop,
+    run_worker_service_once,
+    submit_grouped_raw_events,
 )
 
 
@@ -164,6 +176,24 @@ class PoCTestCase(unittest.TestCase):
         self.assertEqual(summary["primary_detection"]["detection_id"], detection["detection_id"])
         self.assertTrue(summary["case_title"])
 
+    def test_source_capability_matrix_includes_last_seen_signals(self) -> None:
+        run_runtime(self.workspace)
+
+        matrix = build_source_capability_matrix(self.workspace)
+        okta = matrix["sources"]["okta"]
+        source_stats = self.workspace.load_source_stats()["sources"]["okta"]
+
+        self.assertIsNotNone(okta["recent_window_anchor_at"])
+        self.assertIsNotNone(okta["raw_last_seen_at"])
+        self.assertIsNotNone(okta["normalized_last_seen_at"])
+        self.assertGreater(okta["raw_24h_count"], 0)
+        self.assertGreater(okta["normalized_24h_count"], 0)
+        self.assertGreaterEqual(okta["dead_letter_7d_count"], 0)
+        self.assertIn("login", okta["seen_event_types"])
+        self.assertGreater(source_stats["raw_event_count"], 0)
+        self.assertGreater(source_stats["normalized_event_count"], 0)
+        self.assertIn("event_type", source_stats["seen_raw_fields"])
+
     def test_related_detections_group_into_one_case(self) -> None:
         run_runtime(self.workspace)
         detections = list_detections(self.workspace)
@@ -207,7 +237,8 @@ class PoCTestCase(unittest.TestCase):
         detection_advances: list[int] = []
         while True:
             advance = advance_runtime_stream(self.workspace, batch_size=25)
-            if advance["detect"]["new_detection_count"] > 0:
+            worker_result = run_local_processing_workers(self.workspace)
+            if worker_result["detect"]["new_detection_count"] > 0:
                 detection_advances.append(advance["cursor"])
             if advance["complete"]:
                 break
@@ -252,14 +283,15 @@ class PoCTestCase(unittest.TestCase):
         validation = validate_fixture_bundle(fixtures_dir)
         report = build_onboarding_report_markdown(fixtures_dir)
         imported = import_fixture_bundle(self.workspace, fixtures_dir)
-        ingest = ingest_raw_events(self.workspace)
+        worker_result = run_local_processing_workers(self.workspace)
         manifest = build_source_manifest()
 
         self.assertTrue(validation["summary"]["passes"])
         self.assertEqual(validation["summary"]["valid_event_count"], 8)
         self.assertEqual(imported["imported_event_count"], 8)
         self.assertEqual(imported["skipped_invalid_event_count"], 0)
-        self.assertEqual(ingest["normalized_events_seen"], 8)
+        self.assertEqual(imported["batch_count"], 4)
+        self.assertEqual(worker_result["normalization"]["ingest"]["normalized_events_seen"], 8)
         self.assertEqual(manifest["source_pack"], ["okta", "gworkspace", "github", "snowflake"])
         self.assertIn("Validation status: `pass`", report)
 
@@ -303,14 +335,15 @@ class PoCTestCase(unittest.TestCase):
         validation = validate_vendor_fixture_bundle(fixtures_dir)
         report = build_vendor_mapping_report_markdown(fixtures_dir)
         imported = import_vendor_fixture_bundle(self.workspace, fixtures_dir)
-        ingest = ingest_raw_events(self.workspace)
+        worker_result = run_local_processing_workers(self.workspace)
         manifest = build_vendor_source_manifest()
 
         self.assertTrue(validation["summary"]["passes"])
         self.assertEqual(validation["summary"]["mapped_event_count"], 8)
         self.assertEqual(imported["imported_event_count"], 8)
         self.assertEqual(imported["skipped_invalid_event_count"], 0)
-        self.assertEqual(ingest["normalized_events_seen"], 8)
+        self.assertEqual(imported["batch_count"], 4)
+        self.assertEqual(worker_result["normalization"]["ingest"]["normalized_events_seen"], 8)
         self.assertEqual(manifest["mapping_target"], "raw-event-v1")
         self.assertIn("Validation status: `pass`", report)
 
@@ -402,16 +435,141 @@ class PoCTestCase(unittest.TestCase):
     def test_runtime_stream_advances_incrementally(self) -> None:
         initialized = initialize_runtime_stream(self.workspace)
         after_first = advance_runtime_stream(self.workspace, batch_size=7)
+        run_local_processing_workers(self.workspace)
         state_after_first = get_runtime_stream_state(self.workspace)
         after_second = advance_runtime_stream(self.workspace, batch_size=7)
 
         self.assertEqual(initialized["cursor"], 0)
         self.assertEqual(after_first["cursor"], 7)
+        self.assertEqual(after_first["accepted_records"], 7)
         self.assertEqual(state_after_first["normalized_event_count"], 7)
         self.assertEqual(state_after_first["detection_count"], len(self.workspace.list_detections()))
         self.assertGreaterEqual(after_second["cursor"], 14)
 
-    def test_api_startup_syncs_projection_and_read_routes_do_not_resync(self) -> None:
+    def test_cli_only_exposes_service_level_worker_commands(self) -> None:
+        parser = build_parser()
+        subparsers = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+
+        for command in (
+            "run-pipeline",
+            "run-normalization-worker",
+            "run-detection-worker",
+            "run-projector-worker",
+            "run-workers",
+            "run-all-workers",
+            "sync-projection",
+        ):
+            self.assertNotIn(command, subparsers.choices)
+
+        for command in (
+            "run-worker-service",
+            "run-worker-service-once",
+            "run-source-stats-projector",
+            "show-worker-state",
+        ):
+            self.assertIn(command, subparsers.choices)
+
+    def test_workers_process_shared_intake_batches(self) -> None:
+        submitted = submit_grouped_raw_events(
+            self.workspace,
+            records=[
+                {
+                    "source": "okta",
+                    "source_event_id": "okta-worker-0001",
+                    "observed_at": "2026-02-11T10:00:00Z",
+                    "received_at": "2026-02-11T10:01:00Z",
+                    "actor_email": "alice@example.com",
+                    "actor_name": "Alice Admin",
+                    "department": "security",
+                    "role": "security-admin",
+                    "event_type": "login",
+                    "resource_id": "okta:admin-console",
+                    "resource_name": "Admin Console",
+                    "resource_kind": "app",
+                    "sensitivity": "high",
+                    "geo": "US-NY",
+                    "ip": "10.0.0.1",
+                    "privileged": True,
+                },
+                {
+                    "source": "github",
+                    "source_event_id": "github-worker-0001",
+                    "observed_at": "2026-02-11T10:05:00Z",
+                    "received_at": "2026-02-11T10:06:00Z",
+                    "actor_email": "alice@example.com",
+                    "actor_name": "Alice Admin",
+                    "department": "security",
+                    "role": "security-admin",
+                    "event_type": "archive_download",
+                    "resource_id": "github:repo/seccloud",
+                    "resource_name": "seccloud",
+                    "resource_kind": "repo",
+                    "sensitivity": "internal",
+                    "bytes_transferred_mb": 44,
+                },
+            ],
+            intake_kind="push_gateway",
+            integration_id="test-gateway",
+        )
+
+        self.assertEqual(submitted["batch_count"], 2)
+        self.assertEqual(len(self.workspace.list_pending_intake_batches()), 2)
+
+        normalization = run_normalization_worker(self.workspace)
+        detection = run_local_processing_workers(self.workspace)
+        worker_state = get_worker_state(self.workspace)
+
+        self.assertEqual(normalization["processed_batch_count"], 2)
+        self.assertEqual(len(self.workspace.list_pending_intake_batches()), 0)
+        self.assertEqual(len(self.workspace.list_processed_intake_batches()), 2)
+        self.assertEqual(normalization["ingest"]["added_normalized_events"], 2)
+        self.assertEqual(detection["normalization"]["processed_batch_count"], 0)
+        self.assertEqual(worker_state["pending_batch_count"], 0)
+        self.assertEqual(worker_state["processed_batch_count"], 2)
+        self.assertGreaterEqual(worker_state["normalization_runs"], 2)
+        self.assertGreaterEqual(worker_state["detection_runs"], 1)
+
+    def test_event_identity_and_object_keys_are_partition_aware(self) -> None:
+        tenant_workspace = Workspace(self.tempdir / "tenant-workspace", tenant_id="acme-prod")
+        tenant_workspace.bootstrap()
+
+        submit_grouped_raw_events(
+            tenant_workspace,
+            records=[
+                {
+                    "source": "okta",
+                    "source_event_id": "okta-tenant-0001",
+                    "observed_at": "2026-02-11T10:00:00Z",
+                    "received_at": "2026-02-11T10:01:00Z",
+                    "actor_email": "alice@example.com",
+                    "actor_name": "Alice Admin",
+                    "department": "security",
+                    "role": "security-admin",
+                    "event_type": "login",
+                    "resource_id": "okta:admin-console",
+                    "resource_name": "Admin Console",
+                    "resource_kind": "app",
+                    "sensitivity": "high",
+                    "geo": "US-NY",
+                    "ip": "10.0.0.1",
+                    "privileged": True,
+                }
+            ],
+            intake_kind="push_gateway",
+            integration_id="okta-prod",
+        )
+        run_local_processing_workers(tenant_workspace)
+
+        event = tenant_workspace.list_normalized_events()[0]
+        self.assertTrue(event["event_id"].startswith("evt_"))
+        self.assertTrue(event["event_key"].startswith("evk_"))
+        self.assertEqual(event["integration_id"], "okta-prod")
+        self.assertTrue(event["principal"]["entity_id"].startswith("ent_"))
+        self.assertTrue(event["resource"]["entity_id"].startswith("ent_"))
+        self.assertIn("tenant=acme-prod", event["evidence"]["object_key"])
+        self.assertIn("integration=okta-prod", event["evidence"]["object_key"])
+
+    def test_api_startup_does_not_sync_projection_and_read_routes_do_not_resync(self) -> None:
         overview_payload = {
             "stream_state": {
                 "cursor": 0,
@@ -433,6 +591,7 @@ class PoCTestCase(unittest.TestCase):
             "page": {
                 "limit": 14,
                 "offset": 0,
+                "returned": 0,
                 "total": 0,
                 "has_more": False,
             },
@@ -447,16 +606,10 @@ class PoCTestCase(unittest.TestCase):
                 },
                 clear=False,
             ),
-            patch(
-                "seccloud.api.sync_workspace_projection",
-                return_value={"dsn": "postgresql://projection"},
-            ) as sync_mock,
             patch("seccloud.api.fetch_projection_overview", return_value=overview_payload),
             patch("seccloud.api.fetch_projected_events", return_value=events_payload),
         ):
             app = seccloud_api.create_app()
-            lifespan = app.router.lifespan_context(app)
-            asyncio.run(lifespan.__aenter__())
             overview_endpoint = next(
                 route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/overview"
             )
@@ -466,12 +619,233 @@ class PoCTestCase(unittest.TestCase):
 
             overview_response = overview_endpoint()
             events_response = events_endpoint(limit=14, offset=0)
-            asyncio.run(lifespan.__aexit__(None, None, None))
 
         self.assertEqual(overview_response, overview_payload)
         self.assertEqual(events_response, events_payload)
-        self.assertEqual(sync_mock.call_count, 1)
-        self.assertEqual(self.workspace.load_ops_metadata()["dead_letter_count"], 0)
+
+    def test_api_intake_endpoint_enqueues_without_running_workers(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SECCLOUD_WORKSPACE": str(self.workspace.root),
+                "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+            },
+            clear=False,
+        ):
+            app = seccloud_api.create_app()
+            intake_endpoint = next(
+                route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/intake/raw-events"
+            )
+            worker_state_endpoint = next(
+                route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/workers/state"
+            )
+            intake_request = seccloud_api.IntakeRequest(
+                source="okta",
+                records=[
+                    {
+                        "source_event_id": "okta-api-0001",
+                        "observed_at": "2026-02-11T10:00:00Z",
+                        "received_at": "2026-02-11T10:01:00Z",
+                        "actor_email": "alice@example.com",
+                        "actor_name": "Alice Admin",
+                        "department": "security",
+                        "role": "security-admin",
+                        "event_type": "login",
+                        "resource_id": "okta:admin-console",
+                        "resource_name": "Admin Console",
+                        "resource_kind": "app",
+                        "sensitivity": "high",
+                        "geo": "US-NY",
+                        "ip": "10.0.0.1",
+                        "privileged": True,
+                    }
+                ],
+            )
+
+            intake_response = intake_endpoint(intake_request)
+            worker_state = worker_state_endpoint()
+
+        self.assertEqual(intake_response["source"], "okta")
+        self.assertEqual(intake_response["record_count"], 1)
+        self.assertEqual(worker_state["pending_batch_count"], 1)
+        self.assertEqual(worker_state["processed_batch_count"], 0)
+        self.assertEqual(len(self.workspace.list_normalized_events()), 0)
+
+    def test_api_stream_advance_enqueues_without_processing(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SECCLOUD_WORKSPACE": str(self.workspace.root),
+                "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+            },
+            clear=False,
+        ):
+            app = seccloud_api.create_app()
+            reset_endpoint = next(
+                route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/stream/reset"
+            )
+            advance_endpoint = next(
+                route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/stream/advance"
+            )
+            worker_state_endpoint = next(
+                route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/workers/state"
+            )
+
+            reset_endpoint()
+            advance_response = advance_endpoint(batch_size=10)
+            worker_state = worker_state_endpoint()
+
+        self.assertEqual(advance_response["accepted_records"], 10)
+        self.assertGreaterEqual(advance_response["accepted_batches"], 1)
+        self.assertEqual(worker_state["pending_batch_count"], advance_response["accepted_batches"])
+        self.assertEqual(advance_response["pending_batch_count"], advance_response["accepted_batches"])
+        self.assertEqual(len(self.workspace.list_normalized_events()), 0)
+
+    def test_projector_worker_updates_worker_state(self) -> None:
+        run_runtime(self.workspace)
+
+        with patch(
+            "seccloud.projection_store.sync_workspace_projection",
+            return_value={"dsn": "postgresql://projection", "event_count": 5, "detection_count": 2},
+        ):
+            projection = run_projector_worker(self.workspace, "postgresql://projection")
+
+        worker_state = get_worker_state(self.workspace)
+        self.assertEqual(projection["dsn"], "postgresql://projection")
+        self.assertEqual(worker_state["projection_runs"], 1)
+        self.assertIsNotNone(worker_state["last_projection_at"])
+
+    def test_source_stats_projector_updates_worker_state(self) -> None:
+        run_runtime(self.workspace)
+
+        stats = run_source_stats_projector(self.workspace)
+
+        worker_state = get_worker_state(self.workspace)
+        self.assertGreater(stats["source_count"], 0)
+        self.assertEqual(worker_state["source_stats_runs"], 1)
+        self.assertIsNotNone(worker_state["last_source_stats_at"])
+
+    def test_run_all_local_workers_includes_projection(self) -> None:
+        submit_grouped_raw_events(
+            self.workspace,
+            records=[
+                {
+                    "source": "okta",
+                    "source_event_id": "okta-all-workers-0001",
+                    "observed_at": "2026-02-11T10:00:00Z",
+                    "received_at": "2026-02-11T10:01:00Z",
+                    "actor_email": "alice@example.com",
+                    "actor_name": "Alice Admin",
+                    "department": "security",
+                    "role": "security-admin",
+                    "event_type": "login",
+                    "resource_id": "okta:admin-console",
+                    "resource_name": "Admin Console",
+                    "resource_kind": "app",
+                    "sensitivity": "high",
+                    "geo": "US-NY",
+                    "ip": "10.0.0.1",
+                    "privileged": True,
+                }
+            ],
+            intake_kind="push_gateway",
+            integration_id="test-gateway",
+        )
+
+        with patch(
+            "seccloud.projection_store.sync_workspace_projection",
+            return_value={"dsn": "postgresql://projection", "event_count": 1, "detection_count": 0},
+        ):
+            result = run_all_local_workers(self.workspace, "postgresql://projection")
+
+        self.assertIn("source_stats", result)
+        self.assertIn("projection", result)
+        self.assertGreaterEqual(result["source_stats"]["source_count"], 1)
+        self.assertEqual(result["projection"]["dsn"], "postgresql://projection")
+
+    def test_worker_service_once_processes_pending_batches(self) -> None:
+        submit_grouped_raw_events(
+            self.workspace,
+            records=[
+                {
+                    "source": "okta",
+                    "source_event_id": "okta-service-once-0001",
+                    "observed_at": "2026-02-11T10:00:00Z",
+                    "received_at": "2026-02-11T10:01:00Z",
+                    "actor_email": "alice@example.com",
+                    "actor_name": "Alice Admin",
+                    "department": "security",
+                    "role": "security-admin",
+                    "event_type": "login",
+                    "resource_id": "okta:admin-console",
+                    "resource_name": "Admin Console",
+                    "resource_kind": "app",
+                    "sensitivity": "high",
+                    "geo": "US-NY",
+                    "ip": "10.0.0.1",
+                    "privileged": True,
+                }
+            ],
+            intake_kind="push_gateway",
+            integration_id="test-gateway",
+        )
+
+        with patch(
+            "seccloud.projection_store.sync_workspace_projection",
+            return_value={"dsn": "postgresql://projection", "event_count": 1, "detection_count": 0},
+        ):
+            result = run_worker_service_once(self.workspace, "postgresql://projection")
+
+        worker_state = get_worker_state(self.workspace)
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(worker_state["pending_batch_count"], 0)
+        self.assertEqual(worker_state["service_runs"], 1)
+        self.assertEqual(worker_state["last_service_status"], "processed")
+        self.assertEqual(worker_state["source_stats_runs"], 1)
+
+    def test_worker_service_loop_reports_idle_iterations(self) -> None:
+        result = run_worker_service_loop(
+            self.workspace,
+            dsn="postgresql://projection",
+            poll_interval_seconds=0,
+            max_iterations=2,
+        )
+
+        worker_state = get_worker_state(self.workspace)
+        self.assertEqual(result["iterations"], 2)
+        self.assertEqual(result["idle_iterations"], 2)
+        self.assertEqual(worker_state["service_runs"], 2)
+        self.assertEqual(worker_state["last_service_status"], "idle")
+
+    def test_worker_service_once_projects_after_stream_reset_without_pending_batches(self) -> None:
+        initialize_runtime_stream(self.workspace)
+
+        with patch(
+            "seccloud.projection_store.sync_workspace_projection",
+            return_value={"dsn": "postgresql://projection", "event_count": 0, "detection_count": 0},
+        ):
+            result = run_worker_service_once(self.workspace, "postgresql://projection")
+
+        worker_state = get_worker_state(self.workspace)
+        self.assertEqual(result["status"], "projected")
+        self.assertEqual(worker_state["last_service_status"], "projected")
+        self.assertEqual(worker_state["source_stats_runs"], 1)
+        self.assertEqual(worker_state["projection_runs"], 1)
+
+    def test_worker_service_once_materializes_source_stats_without_pending_batches(self) -> None:
+        seed_workspace(self.workspace)
+        ingest_raw_events(self.workspace)
+        self.workspace.save_source_stats({"sources": {}})
+        self.workspace.request_source_stats_refresh()
+
+        result = run_worker_service_once(self.workspace, "postgresql://projection")
+
+        worker_state = get_worker_state(self.workspace)
+        self.assertEqual(result["status"], "materialized")
+        self.assertIn("source_stats", result["result"])
+        self.assertEqual(worker_state["last_service_status"], "materialized")
+        self.assertEqual(worker_state["source_stats_runs"], 1)
+        self.assertEqual(worker_state["projection_runs"], 0)
 
 
 if __name__ == "__main__":

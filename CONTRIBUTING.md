@@ -24,7 +24,7 @@ npm run lint
 uv run python -m unittest discover -s tests -v
 ```
 
-If you change the demo runtime or founder artifacts intentionally, mention that clearly in the PR description.
+If you change tracked fixtures or example inputs intentionally, mention that clearly in the PR description.
 
 ## Branching
 
@@ -43,6 +43,6 @@ Include:
 
 ## Repository Hygiene
 
-- Do not commit local caches, virtualenvs, or throwaway runtime directories.
+- Do not commit local caches, virtualenvs, or generated runtime directories.
 - Keep README and contributor docs updated when commands or workflows change.
-- Treat `.project/` as product and implementation context, not scratch space.
+- Treat `project/` as product and implementation context, not scratch space.
