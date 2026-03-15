@@ -64,7 +64,7 @@ Open Terminal 1 in the repo root and run:
 ```bash
 source .venv/bin/activate
 seccloud start-postgres
-seccloud init-stream --workspace examples/poc/runtime
+seccloud init-stream
 uvicorn seccloud.api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -91,17 +91,19 @@ If you want to exercise the core pipeline without the browser:
 ```bash
 source .venv/bin/activate
 python -m unittest discover -s tests -v
-seccloud run-runtime --workspace examples/poc/runtime
-seccloud show-source-capability-matrix --workspace examples/poc/runtime
+seccloud run-runtime
+seccloud show-source-capability-matrix
 ```
 
 ## Repo Map
 
 - [src](src): Python package with pipeline, onboarding, mapping, API, synthetic stream controls, and CLI
 - [tests](tests): tests
-- [examples](examples): fixture bundles and runtime directories
+- [examples](examples): fixture bundles and reference inputs
 - [web](web): React/Vite frontend
 - [.project](.project): internal specs, plans, and engineering notes
+
+Runtime state is generated locally under `.seccloud/runtime` by default and is gitignored.
 
 ## Current Limits
 

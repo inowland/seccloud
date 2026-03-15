@@ -8,4 +8,5 @@ web-dist/
 .ruff_cache/
 .uv-cache/
 .python-version
+.seccloud/
 examples/poc/demo-runtime-check/

@@ -21,6 +21,7 @@ from seccloud.api_models import (
     StreamReset,
     StreamState,
 )
+from seccloud.defaults import DEFAULT_WORKSPACE
 from seccloud.investigation import (
     get_detection_detail,
     get_event_detail,
@@ -45,7 +46,7 @@ projection_sync_lock = Lock()
 
 
 def create_app() -> FastAPI:
-    workspace_root = Path(os.environ.get("SECCLOUD_WORKSPACE", "examples/poc/runtime"))
+    workspace_root = Path(os.environ.get("SECCLOUD_WORKSPACE", DEFAULT_WORKSPACE))
     dsn = os.environ.get("SECCLOUD_PROJECTION_DSN") or local_postgres_dsn(Path.cwd())
 
     def workspace() -> Workspace:

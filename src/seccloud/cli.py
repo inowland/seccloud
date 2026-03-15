@@ -4,6 +4,7 @@ import argparse
 import json
 from typing import Any
 
+from seccloud.defaults import DEFAULT_WORKSPACE
 from seccloud.investigation import (
     build_evidence_bundle,
     build_peer_comparison,
@@ -64,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_workspace_argument(command: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        command.add_argument("--workspace", default="examples/poc/runtime")
+        command.add_argument("--workspace", default=DEFAULT_WORKSPACE)
         return command
 
     add_workspace_argument(subparsers.add_parser("seed-data"))
@@ -124,17 +125,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_workspace_argument(subparsers.add_parser("export-vendor-source-manifest"))
 
     init_stream = add_workspace_argument(subparsers.add_parser("init-stream"))
-    init_stream.set_defaults(workspace="examples/poc/runtime")
+    init_stream.set_defaults(workspace=DEFAULT_WORKSPACE)
 
     advance_stream = add_workspace_argument(subparsers.add_parser("advance-stream"))
-    advance_stream.set_defaults(workspace="examples/poc/runtime")
+    advance_stream.set_defaults(workspace=DEFAULT_WORKSPACE)
     advance_stream.add_argument("--batch-size", type=int, default=5)
 
     stream_state = add_workspace_argument(subparsers.add_parser("stream-state"))
-    stream_state.set_defaults(workspace="examples/poc/runtime")
+    stream_state.set_defaults(workspace=DEFAULT_WORKSPACE)
 
     sync_projection = add_workspace_argument(subparsers.add_parser("sync-projection"))
-    sync_projection.set_defaults(workspace="examples/poc/runtime")
+    sync_projection.set_defaults(workspace=DEFAULT_WORKSPACE)
     sync_projection.add_argument("--dsn")
 
     subparsers.add_parser("init-postgres")
