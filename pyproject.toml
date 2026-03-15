@@ -42,7 +42,3 @@ select = ["E", "F", "I", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["E402"]
-"src/seccloud/onboarding.py" = ["E501"]
-"src/seccloud/reports.py" = ["E501"]
-"src/seccloud/source_pack.py" = ["E501"]
-"src/seccloud/vendor_exports.py" = ["E501"]

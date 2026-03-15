@@ -327,8 +327,14 @@ def build_vendor_mapping_report_markdown(fixtures_dir: str | Path) -> str:
     lines.extend(
         [
             "## Interpretation",
-            "- This report tests whether realistic vendor-shaped exports can be translated into the current raw-event contract without bespoke parser work.",
-            "- A passing report means the export shape is compatible with the current ingestion contract. It does not yet prove customer-specific semantic correctness.",
+            (
+                "- This report tests whether realistic vendor-shaped exports can be translated into"
+                " the current raw-event contract without bespoke parser work."
+            ),
+            (
+                "- A passing report means the export shape is compatible with the current ingestion"
+                " contract. It does not yet prove customer-specific semantic correctness."
+            ),
         ]
     )
     return "\n".join(lines) + "\n"

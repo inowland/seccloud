@@ -130,8 +130,15 @@ def build_source_capability_markdown(workspace: Workspace) -> str:
     lines.extend(
         [
             "## Interpretation",
-            "- This artifact shows what the current PoC expects from each source and whether the generated runtime satisfied those contracts.",
-            "- Dead letters indicate source events that were observed but deliberately excluded from normalized analytics because the current product contract could not safely consume them.",
+            (
+                "- This artifact shows what the current PoC expects from each source and whether"
+                " the generated runtime satisfied those contracts."
+            ),
+            (
+                "- Dead letters indicate source events that were observed but deliberately excluded"
+                " from normalized analytics because the current product contract could not safely"
+                " consume them."
+            ),
         ]
     )
     return "\n".join(lines) + "\n"

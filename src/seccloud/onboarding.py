@@ -153,8 +153,14 @@ def build_onboarding_report_markdown(fixtures_dir: str | Path) -> str:
     lines.extend(
         [
             "## Interpretation",
-            "- This report is meant to answer whether a candidate customer source pack satisfies the current product contract before ingestion and scoring begin.",
-            "- A passing report does not prove product value. It only proves the source bundle can enter the current substrate without bespoke parser work.",
+            (
+                "- This report is meant to answer whether a candidate customer source pack satisfies"
+                " the current product contract before ingestion and scoring begin."
+            ),
+            (
+                "- A passing report does not prove product value. It only proves the source bundle"
+                " can enter the current substrate without bespoke parser work."
+            ),
         ]
     )
     return "\n".join(lines) + "\n"

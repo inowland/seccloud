@@ -45,4 +45,5 @@ Include:
 
 - Do not commit local caches, virtualenvs, or generated runtime directories.
 - Keep README and contributor docs updated when commands or workflows change.
-- Treat `project/` as product and implementation context, not scratch space.
+- Treat `project/plan/` as the authoritative milestone plan. Update plan files when
+  scope or architecture decisions change.
