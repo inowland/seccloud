@@ -35,6 +35,9 @@ Adopt the following product-target data plane:
 - Normalization workers convert all inbound data into a versioned canonical event contract, persist dead letters, and materialize normalized analytical event batches back to object storage in columnar form.
 - Detection and materialization workers update derived state, create detections, and maintain the application-facing read models.
 - `Postgres` stores detections, cases, checkpoints, manifests, projection state, and a hot event index that links stable `event_id` values to object-storage locations and investigation metadata.
+- The exact lake layout, manifest schema, and object-pointer contract are frozen separately in `/Users/inowland/Development/seccloud/project/spec/lake-contract.md` and `/Users/inowland/Development/seccloud/project/adr/0004-lake-layout-and-manifest-contract.md`.
+- The exact Postgres hot event index schema and detection-to-event linkage contract are frozen separately in `/Users/inowland/Development/seccloud/project/spec/hot-event-index-contract.md` and `/Users/inowland/Development/seccloud/project/adr/0005-hot-event-index-contract.md`.
+- The exact tenant, integration, event, and entity identity rules are frozen separately in `/Users/inowland/Development/seccloud/project/spec/identity-contract.md` and `/Users/inowland/Development/seccloud/project/adr/0006-stable-identity-contract.md`.
 - The system does not require a dedicated full-text or observability search engine in v1. Broader arbitrary search remains a later addition if customer workflows prove it necessary.
 
 ## Consequences
@@ -50,3 +53,6 @@ Adopt the following product-target data plane:
 
 - `/Users/inowland/Development/seccloud/project/spec/product-contract.md`
 - `/Users/inowland/Development/seccloud/project/spec/m01.md`
+- `/Users/inowland/Development/seccloud/project/spec/lake-contract.md`
+- `/Users/inowland/Development/seccloud/project/spec/hot-event-index-contract.md`
+- `/Users/inowland/Development/seccloud/project/spec/identity-contract.md`

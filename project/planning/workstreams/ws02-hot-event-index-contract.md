@@ -1,6 +1,6 @@
 # WS02 Hot Event Index Contract
 
-Status: Planned
+Status: Done
 
 ## Goal
 
@@ -34,10 +34,11 @@ The event index must point into the lake. It cannot be defined cleanly until the
 
 ## Deliverables
 
-- schema proposal for the hot event index
-- list of required indexed columns and query patterns
-- detection-linkage contract showing how `detection_event` edges and evidence pointers work together
-- migration notes from the current projection-only event list
+- authoritative contract spec: [hot-event-index-contract.md](/Users/inowland/Development/seccloud/project/spec/hot-event-index-contract.md)
+- decision ADR: [0005-hot-event-index-contract.md](/Users/inowland/Development/seccloud/project/adr/0005-hot-event-index-contract.md)
+- required indexed columns and query patterns in the spec
+- detection-linkage contract showing how `detection_event_edge` rows and evidence pointers work together
+- migration notes from the current projection-only event list in the spec
 
 ## Required Decisions
 
@@ -51,6 +52,16 @@ The event index must point into the lake. It cannot be defined cleanly until the
 - `/api/events` and event detail can be served without object-store scans
 - detections can explain their linked events after replay and rebuild
 - retention behavior is defined for raw, normalized, and indexed forms of an event
+
+## Outcome
+
+This workstream freezes the following v1 decisions:
+
+- the product-target event index is a separate Postgres table family, not the current `projected_events` demo table
+- `hot_event_index` stores both query columns and canonical normalized `event_payload` JSON for event list and detail reads
+- `detection_event_edge` is the authoritative relational join surface for ordered detection-linked events
+- event rows store retained normalized pointers and optional raw pointers using the WS01 pointer envelope
+- raw retention may expire raw pointers without invalidating indexed event lookup or detection linkage
 
 ## Conflict Boundary
 

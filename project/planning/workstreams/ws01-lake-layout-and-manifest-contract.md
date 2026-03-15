@@ -1,6 +1,6 @@
 # WS01 Lake Layout And Manifest Contract
 
-Status: Planned
+Status: Done
 
 ## Goal
 
@@ -37,10 +37,10 @@ This workstream sets the storage and replay contracts that every later ingestion
 
 ## Deliverables
 
-- an ADR or spec patch defining the lake layout
-- a manifest schema document with versioning rules
-- explicit examples of raw object keys, normalized object keys, and manifest entries
-- implementation-plan notes listing migration steps from the current per-object JSON simulation
+- authoritative contract spec: [lake-contract.md](/Users/inowland/Development/seccloud/project/spec/lake-contract.md)
+- decision ADR: [0004-lake-layout-and-manifest-contract.md](/Users/inowland/Development/seccloud/project/adr/0004-lake-layout-and-manifest-contract.md)
+- explicit examples of raw object keys, normalized object keys, manifest entries, and object pointers in the spec
+- migration notes from the current per-object JSON simulation in the spec
 
 ## Required Decisions
 
@@ -54,6 +54,16 @@ This workstream sets the storage and replay contracts that every later ingestion
 - sample backfill flow can be explained without ambiguity
 - sample detection-to-event lookup can be explained without ambiguity
 - raw-retention behavior can be described without breaking case evidence
+
+## Outcome
+
+This workstream freezes the following v1 decisions:
+
+- raw landing uses immutable `jsonl.gz` batch objects
+- normalized storage uses immutable `Parquet` batch objects
+- raw and normalized batches publish immutable per-batch manifest JSON objects
+- evidence and future event indexes use a versioned object-pointer envelope rather than bare object keys
+- the current per-object JSON runtime is explicitly treated as a local simulation, not the product-target contract
 
 ## Conflict Boundary
 

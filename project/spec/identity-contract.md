@@ -1,0 +1,316 @@
+# Identity Contract
+
+## Purpose
+
+This document defines the authoritative v1 identity contract for tenants, integrations, events, entities, and alias bindings.
+
+This contract freezes the meaning of `event_id`, `event_key`, `entity_id`, `entity_key`, `tenant_id`, and `integration_id` for the product-target data plane. It consumes the frozen lake and hot-event-index contracts and must not redefine object layout, manifest semantics, or Postgres index layout.
+
+## Scope
+
+In scope:
+
+- tenant and integration identity rules
+- `event_id` versus `event_key`
+- `entity_id` versus alias bindings
+- which IDs are canonical, internal-only, or compatibility fields
+- prefix and naming conventions for platform-assigned IDs
+- migration guidance from the current principal and resource identity usage
+
+Out of scope:
+
+- lake object layout changes
+- Postgres schema design beyond ID semantics
+- source-specific collector implementations
+- auth and signing
+
+## Identity Types
+
+The v1 product surface uses the following identity types:
+
+- `tenant_id`: stable customer deployment identifier
+- `integration_id`: stable configured source-instance identifier within a tenant
+- `event_key`: deterministic tenant-local replay key for one logical source event
+- `event_id`: platform-assigned immutable identifier for one logical event
+- `entity_key`: deterministic tenant-local alias-binding key for one observed principal or resource alias
+- `entity_id`: platform-assigned immutable canonical identifier for one principal or resource
+
+Prefix rules for platform-generated IDs:
+
+- `evt_`: event IDs
+- `ent_`: entity IDs
+- `ten_`: tenant IDs when platform-assigned IDs are used directly
+- `int_`: integration IDs when platform-assigned IDs are used directly
+
+Deterministic hash-key prefixes:
+
+- `evk_`: event keys
+- `enk_`: alias-binding keys exposed in v1 payloads as `entity_key`
+
+`event_id` and `entity_id` are immutable platform references. `event_key` and `entity_key` are deterministic resolver keys and must always be interpreted within tenant scope.
+
+## Tenant Identity Rules
+
+- `tenant_id` identifies one customer-local deployment boundary.
+- `tenant_id` is immutable for the lifetime of the deployment and must not be reused for another customer.
+- `tenant_id` must use lowercase ASCII and may contain only `a-z`, `0-9`, `.`, `_`, and `-`.
+- `tenant_id` scopes all deterministic keys, alias bindings, manifests, object prefixes, and hot-index rows.
+- Deterministic keys such as `event_key` and `entity_key` are only unique within a tenant and must never be compared without `tenant_id`.
+
+## Integration Identity Rules
+
+- `integration_id` identifies one configured source adapter instance inside a tenant.
+- `integration_id` is unique within `(tenant_id, source)` and may be reused across different tenants.
+- Missing integration context must normalize to the reserved logical value `default`.
+- `integration_id` participates in `event_key` construction because the same provider event identifier may appear in multiple configured source instances.
+- Alias bindings may be integration-scoped when the alias is only stable within one integration.
+
+Examples:
+
+- `tenant_id = acme-prod`
+- `integration_id = okta-primary`
+- `integration_id = default` for events written without a source-instance identifier
+
+## Event Identity Contract
+
+### `event_key`
+
+`event_key` is the deterministic replay key for one logical event within a tenant.
+
+Rules:
+
+- `event_key` must be derived under `tenant_id` scope from `source`, `integration_id`, and the strongest available upstream event identity material.
+- Replaying the same logical event must reproduce the same `event_key`.
+- Distinct logical events must not intentionally share the same `event_key`.
+- `event_key` is an internal and operator-visible identity surface. Customer-facing references should prefer `event_id`.
+
+Construction priority:
+
+1. Provider-native immutable event identifier, scoped by `tenant_id + source + integration_id`
+2. Source record identifier plus upstream batch or record ordinal if the provider supplies only batch-local IDs
+3. Canonical fallback fingerprint over `tenant_id`, `source`, `integration_id`, normalized `observed_at`, provider event type, principal alias, and resource alias when no durable upstream event ID exists
+
+The fallback fingerprint is a last resort. Later ingestion implementations must record which construction path was used so weak IDs can be audited, but the semantic priority order is frozen here.
+
+### `event_id`
+
+`event_id` is the immutable platform identifier for one logical event.
+
+Rules:
+
+- `event_id` is first allocated when the system encounters a new `(tenant_id, event_key)`.
+- Once allocated, replay and rebuild must resolve the same `event_id` for that `(tenant_id, event_key)`.
+- `event_id` is the stable product-visible reference used by detections, cases, hot event index rows, and event detail APIs.
+- `event_id` must be an opaque surrogate ID generated by the platform, currently `evt_` plus a `UUIDv7` value as implemented in `/Users/inowland/Development/seccloud/src/seccloud/ids.py`.
+- `event_id` must not encode customer data, provider-native identifiers, tenant slugs, or other business semantics.
+- The time-sortable timestamp component inherent in `UUIDv7` is allowed and is part of the intended surrogate-ID contract for ordering and operational ergonomics; it does not change the requirement that `event_id` remain opaque to product consumers.
+
+Replay example:
+
+```text
+tenant_id=acme-prod
+source=okta
+integration_id=okta-primary
+provider_event_id=00u9example
+
+event_key = evk_<digest(tenant_id, source, integration_id, provider_event_id)>
+event_id = evt_01hq9rcgmqf6j8ncm33pa40m3j
+```
+
+Reprocessing the same provider event after replay must keep both values unchanged.
+
+Collision-handling example:
+
+```text
+tenant_id=acme-prod
+source=github
+provider_event_id=123456
+integration_id=github-audit-east -> event_key A
+integration_id=github-audit-west -> event_key B
+```
+
+The keys differ because `integration_id` differs, even though the provider event identifier is the same string.
+
+## Entity Identity Contract
+
+### `entity_id`
+
+`entity_id` is the immutable canonical identifier for one principal or resource inside a tenant.
+
+Rules:
+
+- `entity_id` is allocated the first time an observed alias is bound to a new canonical entity.
+- `entity_id` is the canonical identifier used by detections, derived state, hot index joins, and future graph relationships.
+- `entity_id` must remain stable across alias changes, renames, and provider-display changes as long as the alias-resolution logic determines the same canonical entity.
+- `entity_id` is tenant-scoped business identity even if the generated value is globally unique.
+- `entity_id` follows the same surrogate-ID rule as `event_id`: opaque platform-generated `ent_` plus `UUIDv7` in the current implementation, with no embedded customer or provider business semantics beyond time-sortable generation order.
+
+### `entity_key`
+
+In v1 payloads, `entity_key` is the deterministic alias-binding key for the alias that resolved the canonical entity in that event.
+
+Rules:
+
+- `entity_key` is not the canonical entity identifier.
+- Multiple `entity_key` values may legitimately point to the same `entity_id`.
+- `entity_key` must be derived under `tenant_id` scope from `entity_kind`, `source`, `provider`, optional `integration_id`, `alias_type`, and normalized alias value.
+- `entity_key` remains useful for replay and alias-resolution auditing, but customer-facing references should prefer `entity_id`.
+
+This freezes the migration path from the current runtime, where `entity_key` is already deterministic but is effectively treated as if it were canonical.
+
+## Alias-Binding Contract
+
+Alias bindings connect observed source-specific identifiers to canonical entities.
+
+Logical alias-binding fields:
+
+- `tenant_id`
+- `entity_id`
+- `entity_kind`: `principal` or `resource`
+- `entity_key`: deterministic alias-binding key
+- `source`
+- `provider`
+- `integration_id`: nullable when the alias is stable beyond one integration
+- `alias_type`
+- `alias_value`
+- `alias_value_normalized`
+- `binding_strength`: `immutable_native`, `stable_login`, `derived_name`, or `fallback`
+- `first_seen_at`
+- `last_seen_at`
+- `active`
+
+Rules:
+
+- One alias binding points to exactly one `entity_id` within a tenant.
+- One `entity_id` may have many alias bindings over time.
+- Canonical resolution must prefer stronger bindings before weaker ones.
+- Renames create new alias bindings to the same `entity_id`; they do not require a new canonical entity.
+- If a weaker alias conflicts with an existing stronger binding, the stronger binding wins and the weaker alias must bind to the same canonical `entity_id` or remain unresolved pending operator action.
+
+Binding-strength order:
+
+1. `immutable_native`
+2. `stable_login`
+3. `derived_name`
+4. `fallback`
+
+Principal rename example:
+
+```text
+entity_id = ent_01hq9r9ys5cb6ww1n4pfmxf9z9
+
+binding 1:
+  alias_type = email
+  alias_value = alice@acme.example
+  entity_key = enk_<digest(...)>
+
+binding 2:
+  alias_type = email
+  alias_value = alice.wong@acme.example
+  entity_key = enk_<digest(...)>
+```
+
+Both bindings resolve to the same `entity_id`.
+
+Source-ID collision example:
+
+```text
+resource alias A:
+  tenant_id = acme-prod
+  source = github
+  integration_id = github-audit
+  alias_type = native_resource_id
+  alias_value = 42
+
+resource alias B:
+  tenant_id = acme-prod
+  source = snowflake
+  integration_id = snowflake-access
+  alias_type = native_resource_id
+  alias_value = 42
+```
+
+These must not collide because `source`, `integration_id`, and `entity_kind` differ.
+
+## Compatibility Fields In Current Event Payloads
+
+The current normalized event payload exposes the following principal and resource fields:
+
+- `principal.id`
+- `principal.entity_id`
+- `principal.entity_key`
+- `resource.id`
+- `resource.entity_id`
+- `resource.entity_key`
+
+Their v1 meanings are:
+
+- `principal.id` and `resource.id`: source-local aliases used for readability and source-local lookups; not canonical cross-event identifiers
+- `principal.entity_id` and `resource.entity_id`: canonical stable entity references
+- `principal.entity_key` and `resource.entity_key`: deterministic alias-binding keys for the alias used in that event
+
+Customer-facing joins and long-lived references must use `entity_id`. The `id` and `entity_key` fields remain useful for display, debugging, replay, and alias-resolution audits.
+
+## Current Construction Rules And Required Migration
+
+The current runtime in `src/seccloud/pipeline.py` constructs identities as follows:
+
+- `event_key = hash(source, integration_id, source_event_id)`
+- `event_id = workspace.allocate_event_id(event_key)`
+- principal `entity_key = hash(entity_kind=principal, source, provider, actor_email)`
+- resource `entity_key = hash(entity_kind=resource, source, provider, resource_id)`
+- `principal.id = actor_email`
+- `resource.id = resource_id`
+
+Migration rules:
+
+- The current `event_key` helper remains a valid v1 implementation only when `source_event_id` is a strong provider event identifier. Later ingestion paths must apply the construction-priority rules in this document for weaker IDs.
+- `event_id` remains the canonical event reference and continues to be allocated from `(tenant_id, event_key)` mappings.
+- Current `principal.entity_key` and `resource.entity_key` values are reinterpreted as alias-binding keys, not canonical entity identifiers.
+- Current `principal.id = actor_email` and `resource.id = resource_id` remain compatibility fields, but future joins in derived state, detections, and indexes must prefer `entity_id`.
+- The current `identity_manifest.json` mapping from deterministic keys to generated IDs is a local simulation of the contract. Product-target implementations may use other persistence layers, but they must preserve the same replay semantics.
+
+## Contract Examples
+
+### Replay Of The Same Event
+
+```text
+tenant_id = acme-prod
+integration_id = okta-primary
+source = okta
+source_event_id = 00u9example
+
+event_key -> evk_x
+event_id -> evt_y
+
+replay:
+event_key -> evk_x
+event_id -> evt_y
+```
+
+### Principal Rename Without Duplicate Canonical Entity
+
+```text
+event 1 principal:
+  id = alice@acme.example
+  entity_id = ent_123
+  entity_key = enk_old
+
+event 2 principal after rename:
+  id = alice.wong@acme.example
+  entity_id = ent_123
+  entity_key = enk_new
+```
+
+### Two Integrations With The Same Native Event Identifier
+
+```text
+tenant_id = acme-prod
+source = github
+source_event_id = 123456
+
+integration_id = github-audit-east -> event_key evk_a
+integration_id = github-audit-west -> event_key evk_b
+```
+
+`evk_a` and `evk_b` must remain distinct.

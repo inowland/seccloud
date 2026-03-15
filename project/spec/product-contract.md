@@ -36,6 +36,9 @@ The company-level direction is intent-aware security for privileged humans and a
 - API-serving processes are stateless and separate from collector, ingestion, normalization, and detection workers.
 - The product must support both scheduled pull-based collectors against customer APIs and authenticated push-based ingestion for high-volume telemetry.
 - The first product-target substrate uses customer-local object storage for raw and normalized event artifacts, an asynchronous queue for processing coordination, and `Postgres` for detections, cases, checkpoints, manifests, hot event indexes, and application-facing read models.
+- The lake layout, manifest contract, and object-pointer semantics for customer-local object storage are versioned product surfaces and must not drift outside the contract defined in `/Users/inowland/Development/seccloud/project/spec/lake-contract.md`.
+- The hot event index schema and detection-to-event linkage rules for `Postgres` are versioned product surfaces and must not drift outside the contract defined in `/Users/inowland/Development/seccloud/project/spec/hot-event-index-contract.md`.
+- The identity rules for `tenant_id`, `integration_id`, `event_id`, `event_key`, `entity_id`, and alias bindings are versioned product surfaces and must not drift outside the contract defined in `/Users/inowland/Development/seccloud/project/spec/identity-contract.md`.
 - The API tier may read from projections and event indexes, but it must not depend on running ingestion or detection work inline with request handling.
 
 ## Data Retention Contract
@@ -88,6 +91,13 @@ The following concepts are part of the stable product surface and must remain ve
 - `Detection`: score, reason codes, confidence, related events, related entities, and model version.
 - `Case`: timeline, evidence bundle, analyst actions, disposition, and feedback.
 - `DerivedState`: customer-local long-lived behavioral context needed for scoring and investigation.
+- `ObjectPointer`: a versioned reference to an immutable retained lake object and, when applicable, a specific record inside that object.
+- `BatchManifest`: a versioned description of one immutable raw or normalized lake batch, including replay and retention metadata.
+- `HotEventIndexRecord`: a versioned Postgres read-model row for one retained normalized event, including query fields and lake pointers.
+- `DetectionEventEdge`: a versioned Postgres linkage between a detection and an indexed event, preserving event order within the detection.
+- `TenantIdentity`: the stable deployment-scoped identifier that bounds deterministic keys and retained data.
+- `IntegrationIdentity`: the stable configured source-instance identifier within one tenant.
+- `AliasBinding`: the tenant-scoped mapping from one observed principal or resource alias to one canonical `entity_id`.
 
 These contracts must remain extensible enough for later agent identities, privilege-state context, session lineage, and graph-oriented relationship modeling without breaking the initial technical telemetry wedge.
 
