@@ -7,7 +7,7 @@ from typing import Any
 
 from seccloud.contracts import Action, DerivedState, Event, EvidencePointer, Principal, Resource
 from seccloud.scoring import build_embedding, score_event
-from seccloud.storage import Workspace, parse_timestamp, read_json, write_json
+from seccloud.storage import Workspace, parse_timestamp, write_json
 from seccloud.synthetic import generate_synthetic_dataset
 
 SOURCE_MAPPING = {
@@ -302,179 +302,43 @@ def rebuild_derived_state(workspace: Workspace) -> dict[str, Any]:
     return build_derived_state_and_detections(workspace)
 
 
-def expected_detection_for_raw_scenario(scenario: str, expectations: dict[str, bool]) -> bool:
-    if scenario in expectations:
-        return expectations[scenario]
-    return False
-
-
-def evaluate_scenarios(workspace: Workspace) -> dict[str, Any]:
-    expectations = read_json(workspace.synthetic_manifest_path, {"expectations": {}}).get("expectations", {})
-    raw_events = workspace.list_raw_events()
-    dead_letters = workspace.list_dead_letters()
-    detections = workspace.list_detections()
-    detected_scenarios = {item["scenario"] for item in detections}
-    detection_count_by_scenario: dict[str, int] = {}
-    detection_count_by_event_scenario: dict[str, int] = {}
-    raw_event_count_by_scenario: dict[str, int] = {}
-    raw_event_count_by_source: dict[str, int] = {}
-    detected_raw_event_ids: set[str] = set()
-    detection_count_by_source: dict[str, int] = {}
-    unexpected_detection_count_by_source: dict[str, int] = {}
-    unexpected_detections: list[dict[str, Any]] = []
-    missed_expected_events: list[dict[str, Any]] = []
-
-    for raw_event in raw_events:
-        raw_scenario = raw_event.get("scenario", "unknown")
-        raw_event_count_by_scenario[raw_scenario] = raw_event_count_by_scenario.get(raw_scenario, 0) + 1
-        raw_event_count_by_source[raw_event["source"]] = raw_event_count_by_source.get(raw_event["source"], 0) + 1
-
-    for detection in detections:
-        detection_count_by_scenario[detection["scenario"]] = (
-            detection_count_by_scenario.get(detection["scenario"], 0) + 1
-        )
-        raw_scenarios_for_detection: set[str] = set()
-        sources_for_detection: set[str] = set()
-        raw_event_ids_for_detection: list[str] = []
-        for pointer in detection["evidence"]:
-            raw_payload = workspace.read_raw_by_object_key(pointer["object_key"])
-            if raw_payload is None:
-                continue
-            raw_scenario = raw_payload.get("scenario", "unknown")
-            source = raw_payload["source"]
-            raw_scenarios_for_detection.add(raw_scenario)
-            sources_for_detection.add(source)
-            raw_event_ids_for_detection.append(raw_payload["source_event_id"])
-            detected_raw_event_ids.add(raw_payload["source_event_id"])
-            detection_count_by_event_scenario[raw_scenario] = detection_count_by_event_scenario.get(raw_scenario, 0) + 1
-            detection_count_by_source[source] = detection_count_by_source.get(source, 0) + 1
-        if raw_scenarios_for_detection & {"baseline", "benign_role_change_control"}:
-            for source in sources_for_detection:
-                unexpected_detection_count_by_source[source] = unexpected_detection_count_by_source.get(source, 0) + 1
-            unexpected_detections.append(
-                {
-                    "detection_id": detection["detection_id"],
-                    "scenario": detection["scenario"],
-                    "raw_event_scenarios": sorted(raw_scenarios_for_detection),
-                    "raw_event_ids": sorted(raw_event_ids_for_detection),
-                    "sources": sorted(sources_for_detection),
-                    "event_ids": detection["event_ids"],
-                }
-            )
-
-    for raw_event in raw_events:
-        raw_scenario = raw_event.get("scenario", "unknown")
-        if (
-            expected_detection_for_raw_scenario(raw_scenario, expectations)
-            and raw_event["source_event_id"] not in detected_raw_event_ids
-        ):
-            missed_expected_events.append(
-                {
-                    "source_event_id": raw_event["source_event_id"],
-                    "source": raw_event["source"],
-                    "scenario": raw_scenario,
-                    "resource_id": raw_event["resource_id"],
-                }
-            )
-
-    results: dict[str, Any] = {}
-    for scenario, expected in expectations.items():
-        matching_detection_count = detection_count_by_event_scenario.get(scenario, 0)
-        expected_event_count = raw_event_count_by_scenario.get(scenario, 0)
-        no_unexpected_detection = matching_detection_count == 0 if not expected else matching_detection_count > 0
-        results[scenario] = {
-            "expected_detection": expected,
-            "detected": scenario in detected_scenarios,
-            "expected_event_count": expected_event_count,
-            "matching_detection_count": matching_detection_count,
-            "status": "pass" if no_unexpected_detection else "fail",
-        }
-
-    source_metrics: dict[str, Any] = {}
-    for source, raw_count in raw_event_count_by_source.items():
-        detection_count = detection_count_by_source.get(source, 0)
-        unexpected_count = unexpected_detection_count_by_source.get(source, 0)
-        source_metrics[source] = {
-            "raw_event_count": raw_count,
-            "detection_count": detection_count,
-            "unexpected_detection_count": unexpected_count,
-            "dead_letter_count": 0,
-        }
-    dead_letter_reason_counts: dict[str, int] = {}
-    for dead_letter in dead_letters:
-        source = dead_letter["source"]
-        reason = dead_letter["reason"]
-        source_metrics.setdefault(
-            source,
-            {
-                "raw_event_count": 0,
-                "detection_count": 0,
-                "unexpected_detection_count": 0,
-                "dead_letter_count": 0,
-            },
-        )
-        source_metrics[source]["dead_letter_count"] += 1
-        dead_letter_reason_counts[reason] = dead_letter_reason_counts.get(reason, 0) + 1
-
-    summary = {
-        "passes": not unexpected_detections
-        and not missed_expected_events
-        and all(item["status"] == "pass" for item in results.values()),
-        "unexpected_detection_count": len(unexpected_detections),
-        "missed_expected_event_count": len(missed_expected_events),
-        "total_detection_count": len(detections),
-        "expected_detected_scenario_count": sum(
-            1 for item in results.values() if item["expected_detection"] and item["status"] == "pass"
-        ),
-    }
+def sanitize_ops_metadata(payload: dict[str, Any] | None) -> dict[str, Any]:
+    payload = payload or {}
     return {
-        "expected_scenarios": expectations,
-        "detected_scenarios": sorted(detected_scenarios),
-        "detection_count_by_scenario": detection_count_by_scenario,
-        "detection_count_by_event_scenario": detection_count_by_event_scenario,
-        "raw_event_count_by_scenario": raw_event_count_by_scenario,
-        "raw_event_count_by_source": raw_event_count_by_source,
-        "source_metrics": source_metrics,
-        "ingest_diagnostics": {
-            "dead_letter_count": len(dead_letters),
-            "dead_letter_reason_counts": dead_letter_reason_counts,
-        },
-        "unexpected_detections": unexpected_detections,
-        "missed_expected_events": missed_expected_events,
-        "summary": summary,
-        "results": results,
+        "workspace": payload.get("workspace"),
+        "event_counts_by_source": dict(payload.get("event_counts_by_source", {})),
+        "dead_letter_count": payload.get("dead_letter_count", 0),
+        "dead_letter_counts_by_source": dict(payload.get("dead_letter_counts_by_source", {})),
+        "contains_raw_payloads": payload.get("contains_raw_payloads", False),
     }
 
 
 def collect_ops_metadata(workspace: Workspace) -> dict[str, Any]:
     normalized_events = workspace.list_normalized_events()
-    detections = workspace.list_detections()
     sources = Counter(item["source"] for item in normalized_events)
     dead_letters = workspace.list_dead_letters()
-    metadata = {
-        "workspace": str(workspace.root),
-        "event_counts_by_source": dict(sources),
-        "normalized_event_count": len(normalized_events),
-        "detection_count": len(detections),
-        "dead_letter_count": len(dead_letters),
-        "dead_letter_counts_by_source": dict(Counter(item["source"] for item in dead_letters)),
-        "contains_raw_payloads": False,
-    }
+    metadata = sanitize_ops_metadata(
+        {
+            "workspace": str(workspace.root),
+            "event_counts_by_source": dict(sources),
+            "dead_letter_count": len(dead_letters),
+            "dead_letter_counts_by_source": dict(Counter(item["source"] for item in dead_letters)),
+            "contains_raw_payloads": False,
+        }
+    )
     workspace.save_ops_metadata(metadata)
     return metadata
 
 
-def run_demo(workspace: Workspace) -> dict[str, Any]:
+def run_runtime(workspace: Workspace) -> dict[str, Any]:
     workspace.reset_runtime()
     seed_result = seed_workspace(workspace)
     ingest_result = ingest_raw_events(workspace)
     detection_result = build_derived_state_and_detections(workspace)
-    evaluation = evaluate_scenarios(workspace)
     ops_metadata = collect_ops_metadata(workspace)
     return {
         "seed": seed_result,
         "ingest": ingest_result,
         "detect": detection_result,
-        "evaluation": evaluation,
         "ops_metadata": ops_metadata,
     }

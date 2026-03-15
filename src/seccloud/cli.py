@@ -4,14 +4,6 @@ import argparse
 import json
 from typing import Any
 
-from seccloud.demo_postgres import (
-    demo_postgres_dsn,
-    init_demo_postgres,
-    start_demo_postgres,
-    stop_demo_postgres,
-)
-from seccloud.demo_projection import sync_workspace_to_postgres
-from seccloud.demo_stream import advance_demo_stream, get_demo_stream_state, initialize_demo_stream
 from seccloud.investigation import (
     build_evidence_bundle,
     build_peer_comparison,
@@ -20,6 +12,12 @@ from seccloud.investigation import (
     list_detections,
     summarize_case,
     update_case,
+)
+from seccloud.local_postgres import (
+    init_local_postgres,
+    local_postgres_dsn,
+    start_local_postgres,
+    stop_local_postgres,
 )
 from seccloud.onboarding import (
     build_onboarding_report_markdown,
@@ -31,16 +29,20 @@ from seccloud.onboarding import (
 from seccloud.pipeline import (
     build_derived_state_and_detections,
     collect_ops_metadata,
-    evaluate_scenarios,
     ingest_raw_events,
     rebuild_derived_state,
-    run_demo,
+    run_runtime,
     seed_workspace,
 )
+from seccloud.projection_store import sync_workspace_projection
 from seccloud.reports import (
     build_conversation_pack_markdown,
-    build_evaluation_summary_markdown,
     export_founder_artifacts,
+)
+from seccloud.runtime_stream import (
+    advance_runtime_stream,
+    get_runtime_stream_state,
+    initialize_runtime_stream,
 )
 from seccloud.source_pack import build_source_capability_markdown
 from seccloud.storage import Workspace
@@ -67,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_workspace_argument(subparsers.add_parser("seed-data"))
     add_workspace_argument(subparsers.add_parser("run-pipeline"))
-    add_workspace_argument(subparsers.add_parser("run-demo"))
+    add_workspace_argument(subparsers.add_parser("run-runtime"))
     add_workspace_argument(subparsers.add_parser("list-detections"))
 
     timeline = add_workspace_argument(subparsers.add_parser("show-timeline"))
@@ -95,8 +97,6 @@ def build_parser() -> argparse.ArgumentParser:
     retention.add_argument("--reference-time", required=True)
 
     add_workspace_argument(subparsers.add_parser("rebuild-derived-state"))
-    add_workspace_argument(subparsers.add_parser("evaluate-scenarios"))
-    add_workspace_argument(subparsers.add_parser("show-evaluation-report"))
     add_workspace_argument(subparsers.add_parser("show-conversation-pack"))
     add_workspace_argument(subparsers.add_parser("show-source-capability-matrix"))
     add_workspace_argument(subparsers.add_parser("export-founder-artifacts"))
@@ -123,23 +123,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_workspace_argument(subparsers.add_parser("export-vendor-source-manifest"))
 
-    demo_init_stream = add_workspace_argument(subparsers.add_parser("demo-init-stream"))
-    demo_init_stream.set_defaults(workspace="examples/poc/demo-runtime")
+    init_stream = add_workspace_argument(subparsers.add_parser("init-stream"))
+    init_stream.set_defaults(workspace="examples/poc/runtime")
 
-    demo_advance_stream = add_workspace_argument(subparsers.add_parser("demo-advance-stream"))
-    demo_advance_stream.set_defaults(workspace="examples/poc/demo-runtime")
-    demo_advance_stream.add_argument("--batch-size", type=int, default=5)
+    advance_stream = add_workspace_argument(subparsers.add_parser("advance-stream"))
+    advance_stream.set_defaults(workspace="examples/poc/runtime")
+    advance_stream.add_argument("--batch-size", type=int, default=5)
 
-    demo_stream_state = add_workspace_argument(subparsers.add_parser("demo-stream-state"))
-    demo_stream_state.set_defaults(workspace="examples/poc/demo-runtime")
+    stream_state = add_workspace_argument(subparsers.add_parser("stream-state"))
+    stream_state.set_defaults(workspace="examples/poc/runtime")
 
-    demo_sync_postgres = add_workspace_argument(subparsers.add_parser("demo-sync-postgres"))
-    demo_sync_postgres.set_defaults(workspace="examples/poc/demo-runtime")
-    demo_sync_postgres.add_argument("--dsn")
+    sync_projection = add_workspace_argument(subparsers.add_parser("sync-projection"))
+    sync_projection.set_defaults(workspace="examples/poc/runtime")
+    sync_projection.add_argument("--dsn")
 
-    subparsers.add_parser("demo-init-postgres")
-    subparsers.add_parser("demo-start-postgres")
-    subparsers.add_parser("demo-stop-postgres")
+    subparsers.add_parser("init-postgres")
+    subparsers.add_parser("start-postgres")
+    subparsers.add_parser("stop-postgres")
 
     case_summary = add_workspace_argument(subparsers.add_parser("show-case-summary"))
     case_summary.add_argument("--case-id", required=True)
@@ -163,9 +163,9 @@ def main(argv: list[str] | None = None) -> int:
         detect = build_derived_state_and_detections(workspace)
         ops = collect_ops_metadata(workspace)
         _print({"ingest": ingest, "detect": detect, "ops_metadata": ops})
-    elif args.command == "run-demo":
+    elif args.command == "run-runtime":
         assert workspace is not None
-        result = run_demo(workspace)
+        result = run_runtime(workspace)
         result["artifacts"] = export_founder_artifacts(workspace)
         for detection in list_detections(workspace):
             create_case_from_detection(workspace, detection["detection_id"])
@@ -209,12 +209,6 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "rebuild-derived-state":
         assert workspace is not None
         _print(rebuild_derived_state(workspace))
-    elif args.command == "evaluate-scenarios":
-        assert workspace is not None
-        _print(evaluate_scenarios(workspace))
-    elif args.command == "show-evaluation-report":
-        assert workspace is not None
-        print(build_evaluation_summary_markdown(workspace), end="")
     elif args.command == "show-conversation-pack":
         assert workspace is not None
         print(build_conversation_pack_markdown(workspace), end="")
@@ -246,24 +240,24 @@ def main(argv: list[str] | None = None) -> int:
                 "path": export_vendor_source_manifest(workspace),
             }
         )
-    elif args.command == "demo-init-stream":
+    elif args.command == "init-stream":
         assert workspace is not None
-        _print(initialize_demo_stream(workspace))
-    elif args.command == "demo-advance-stream":
+        _print(initialize_runtime_stream(workspace))
+    elif args.command == "advance-stream":
         assert workspace is not None
-        _print(advance_demo_stream(workspace, batch_size=args.batch_size))
-    elif args.command == "demo-stream-state":
+        _print(advance_runtime_stream(workspace, batch_size=args.batch_size))
+    elif args.command == "stream-state":
         assert workspace is not None
-        _print(get_demo_stream_state(workspace))
-    elif args.command == "demo-sync-postgres":
+        _print(get_runtime_stream_state(workspace))
+    elif args.command == "sync-projection":
         assert workspace is not None
-        _print(sync_workspace_to_postgres(workspace, args.dsn or demo_postgres_dsn(".")))
-    elif args.command == "demo-init-postgres":
-        _print(init_demo_postgres("."))
-    elif args.command == "demo-start-postgres":
-        _print(start_demo_postgres("."))
-    elif args.command == "demo-stop-postgres":
-        _print(stop_demo_postgres("."))
+        _print(sync_workspace_projection(workspace, args.dsn or local_postgres_dsn(".")))
+    elif args.command == "init-postgres":
+        _print(init_local_postgres("."))
+    elif args.command == "start-postgres":
+        _print(start_local_postgres("."))
+    elif args.command == "stop-postgres":
+        _print(stop_local_postgres("."))
     elif args.command == "export-founder-artifacts":
         assert workspace is not None
         _print(export_founder_artifacts(workspace))

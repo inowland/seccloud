@@ -93,7 +93,6 @@ def build_evidence_bundle(workspace: Workspace, detection_id: str) -> dict[str, 
             }
         )
     return {
-        "detection": detection,
         "evidence_items": bundle_items,
     }
 
@@ -116,7 +115,6 @@ def build_peer_comparison(workspace: Workspace, detection_id: str) -> dict[str, 
     resource_id = anchor_event["resource"]["id"]
     peer_resource_count = peer_state.get("resource_counts", {}).get(resource_id, 0)
     return {
-        "detection_id": detection_id,
         "principal_id": anchor_event["principal"]["id"],
         "peer_group": peer_group,
         "resource_id": resource_id,
@@ -130,11 +128,9 @@ def build_peer_comparison(workspace: Workspace, detection_id: str) -> dict[str, 
 
 def get_detection_detail(workspace: Workspace, detection_id: str) -> dict[str, Any]:
     detection = workspace.get_detection(detection_id)
-    linked_case = _find_case_for_detection(workspace, detection_id)
     event_details = [get_event_detail(workspace, event_id) for event_id in detection["event_ids"]]
     return {
         "detection": detection,
-        "linked_case_id": linked_case["case_id"] if linked_case else None,
         "peer_comparison": build_peer_comparison(workspace, detection_id),
         "evidence_bundle": build_evidence_bundle(workspace, detection_id),
         "events": [event for event in event_details if event is not None],

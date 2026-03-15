@@ -1,0 +1,1136 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Seccloud API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stream/reset": {
+      "post": {
+        "summary": "Stream Reset",
+        "operationId": "stream_reset_api_stream_reset_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamReset"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stream/advance": {
+      "post": {
+        "summary": "Stream Advance",
+        "operationId": "stream_advance_api_stream_advance_post",
+        "parameters": [
+          {
+            "name": "batch_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 5,
+              "title": "Batch Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamAdvance"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stream/state": {
+      "get": {
+        "summary": "Stream State",
+        "operationId": "stream_state_api_stream_state_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/overview": {
+      "get": {
+        "summary": "Overview",
+        "operationId": "overview_api_overview_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "summary": "Events",
+        "operationId": "events_api_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/detections": {
+      "get": {
+        "summary": "Detections",
+        "operationId": "detections_api_detections_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/detections/{detection_id}": {
+      "get": {
+        "summary": "Detection Detail",
+        "operationId": "detection_detail_api_detections__detection_id__get",
+        "parameters": [
+          {
+            "name": "detection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Detection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/source-capability": {
+      "get": {
+        "summary": "Source Capability",
+        "operationId": "source_capability_api_source_capability_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCapabilityMatrix"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events/{event_id}": {
+      "get": {
+        "summary": "Event Detail",
+        "operationId": "event_detail_api_events__event_id__get",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Action": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "verb": {
+            "type": "string",
+            "title": "Verb"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["source", "verb", "category"],
+        "title": "Action"
+      },
+      "Detection": {
+        "properties": {
+          "detection_id": {
+            "type": "string",
+            "title": "Detection Id"
+          },
+          "scenario": {
+            "type": "string",
+            "title": "Scenario"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "feature_attributions": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Feature Attributions"
+          },
+          "event_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Event Ids"
+          },
+          "related_entity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Entity Ids"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detection_id",
+          "scenario",
+          "title",
+          "score",
+          "confidence",
+          "severity",
+          "reasons",
+          "feature_attributions",
+          "event_ids",
+          "related_entity_ids",
+          "evidence",
+          "model_version",
+          "status"
+        ],
+        "title": "Detection"
+      },
+      "DetectionDetail": {
+        "properties": {
+          "detection": {
+            "$ref": "#/components/schemas/Detection"
+          },
+          "peer_comparison": {
+            "$ref": "#/components/schemas/DetectionPeerComparison"
+          },
+          "evidence_bundle": {
+            "$ref": "#/components/schemas/DetectionEvidenceBundle"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detection",
+          "peer_comparison",
+          "evidence_bundle",
+          "events"
+        ],
+        "title": "DetectionDetail"
+      },
+      "DetectionEvidenceBundle": {
+        "properties": {
+          "evidence_items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceBundleItem"
+            },
+            "type": "array",
+            "title": "Evidence Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["evidence_items"],
+        "title": "DetectionEvidenceBundle"
+      },
+      "DetectionList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Detection"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "page": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["items", "page"],
+        "title": "DetectionList"
+      },
+      "DetectionPeerComparison": {
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "title": "Principal Id"
+          },
+          "peer_group": {
+            "type": "string",
+            "title": "Peer Group"
+          },
+          "resource_id": {
+            "type": "string",
+            "title": "Resource Id"
+          },
+          "principal_total_events": {
+            "type": "integer",
+            "title": "Principal Total Events"
+          },
+          "principal_prior_resource_access_count": {
+            "type": "integer",
+            "title": "Principal Prior Resource Access Count"
+          },
+          "peer_group_resource_access_count": {
+            "type": "integer",
+            "title": "Peer Group Resource Access Count"
+          },
+          "peer_group_principal_count": {
+            "type": "integer",
+            "title": "Peer Group Principal Count"
+          },
+          "detection_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Detection Reasons"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "principal_id",
+          "peer_group",
+          "resource_id",
+          "principal_total_events",
+          "principal_prior_resource_access_count",
+          "peer_group_resource_access_count",
+          "peer_group_principal_count",
+          "detection_reasons"
+        ],
+        "title": "DetectionPeerComparison"
+      },
+      "Event": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "source_event_id": {
+            "type": "string",
+            "title": "Source Event Id"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "observed_at": {
+            "type": "string",
+            "title": "Observed At"
+          },
+          "environment": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Environment"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Attributes"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/EvidencePointer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_id",
+          "source",
+          "source_event_id",
+          "principal",
+          "resource",
+          "action",
+          "observed_at",
+          "environment",
+          "attributes",
+          "evidence"
+        ],
+        "title": "Event"
+      },
+      "EventList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "page": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["items", "page"],
+        "title": "EventList"
+      },
+      "EvidenceBundleItem": {
+        "properties": {
+          "pointer": {
+            "$ref": "#/components/schemas/EvidencePointer"
+          },
+          "raw_payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Payload"
+          },
+          "retention_expired": {
+            "type": "boolean",
+            "title": "Retention Expired"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["pointer", "raw_payload", "retention_expired"],
+        "title": "EvidenceBundleItem"
+      },
+      "EvidencePointer": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "object_key": {
+            "type": "string",
+            "title": "Object Key"
+          },
+          "raw_event_id": {
+            "type": "string",
+            "title": "Raw Event Id"
+          },
+          "observed_at": {
+            "type": "string",
+            "title": "Observed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["source", "object_key", "raw_event_id", "observed_at"],
+        "title": "EvidencePointer"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Health": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["status"],
+        "title": "Health"
+      },
+      "OpsMetadata": {
+        "properties": {
+          "workspace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace"
+          },
+          "event_counts_by_source": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Event Counts By Source"
+          },
+          "dead_letter_count": {
+            "type": "integer",
+            "title": "Dead Letter Count"
+          },
+          "dead_letter_counts_by_source": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dead Letter Counts By Source"
+          },
+          "contains_raw_payloads": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contains Raw Payloads"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["event_counts_by_source", "dead_letter_count"],
+        "title": "OpsMetadata"
+      },
+      "Overview": {
+        "properties": {
+          "stream_state": {
+            "$ref": "#/components/schemas/StreamState"
+          },
+          "ops_metadata": {
+            "$ref": "#/components/schemas/OpsMetadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["stream_state", "ops_metadata"],
+        "title": "Overview"
+      },
+      "Pagination": {
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["limit", "offset", "total", "has_more"],
+        "title": "Pagination"
+      },
+      "Principal": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "department": {
+            "type": "string",
+            "title": "Department"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Attributes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "provider",
+          "email",
+          "display_name",
+          "department",
+          "attributes"
+        ],
+        "title": "Principal"
+      },
+      "Resource": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sensitivity": {
+            "type": "string",
+            "title": "Sensitivity"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Attributes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "provider",
+          "name",
+          "sensitivity",
+          "attributes"
+        ],
+        "title": "Resource"
+      },
+      "SourceCapabilityDetails": {
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "required_event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Event Types"
+          },
+          "required_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Fields"
+          },
+          "seen_event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Seen Event Types"
+          },
+          "missing_required_event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Required Event Types"
+          },
+          "required_field_coverage": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Required Field Coverage"
+          },
+          "missing_required_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Required Fields"
+          },
+          "raw_event_count": {
+            "type": "integer",
+            "title": "Raw Event Count"
+          },
+          "normalized_event_count": {
+            "type": "integer",
+            "title": "Normalized Event Count"
+          },
+          "dead_letter_count": {
+            "type": "integer",
+            "title": "Dead Letter Count"
+          },
+          "dead_letter_reason_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Dead Letter Reason Counts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "display_name",
+          "required_event_types",
+          "required_fields",
+          "seen_event_types",
+          "missing_required_event_types",
+          "required_field_coverage",
+          "missing_required_fields",
+          "raw_event_count",
+          "normalized_event_count",
+          "dead_letter_count",
+          "dead_letter_reason_counts"
+        ],
+        "title": "SourceCapabilityDetails"
+      },
+      "SourceCapabilityMatrix": {
+        "properties": {
+          "source_pack": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Pack"
+          },
+          "sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SourceCapabilityDetails"
+            },
+            "type": "object",
+            "title": "Sources"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["source_pack", "sources"],
+        "title": "SourceCapabilityMatrix"
+      },
+      "StreamAdvance": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "total_source_events": {
+            "type": "integer",
+            "title": "Total Source Events"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete"
+          },
+          "batch_size": {
+            "type": "integer",
+            "title": "Batch Size"
+          },
+          "ingest": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Ingest"
+          },
+          "detect": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detect"
+          },
+          "ops_metadata": {
+            "$ref": "#/components/schemas/OpsMetadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "cursor",
+          "total_source_events",
+          "complete",
+          "batch_size",
+          "ingest",
+          "detect",
+          "ops_metadata"
+        ],
+        "title": "StreamAdvance"
+      },
+      "StreamReset": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "total_source_events": {
+            "type": "integer",
+            "title": "Total Source Events"
+          },
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["status", "total_source_events", "cursor"],
+        "title": "StreamReset"
+      },
+      "StreamState": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "total_source_events": {
+            "type": "integer",
+            "title": "Total Source Events"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete"
+          },
+          "normalized_event_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Event Count"
+          },
+          "detection_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detection Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["cursor", "total_source_events", "complete"],
+        "title": "StreamState"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": ["loc", "msg", "type"],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

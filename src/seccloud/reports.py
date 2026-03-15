@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 
 from seccloud.onboarding import build_source_manifest
-from seccloud.pipeline import evaluate_scenarios
-from seccloud.source_pack import build_source_capability_markdown
+from seccloud.pipeline import collect_ops_metadata
+from seccloud.source_pack import build_source_capability_markdown, build_source_capability_matrix
 from seccloud.storage import Workspace
 from seccloud.vendor_exports import build_vendor_source_manifest
 
@@ -20,84 +20,43 @@ def _format_detection_bullets(detections: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
-def build_evaluation_summary_markdown(workspace: Workspace) -> str:
-    evaluation = evaluate_scenarios(workspace)
+def _build_report_metrics(workspace: Workspace) -> dict[str, object]:
     detections = workspace.list_detections()
-    ingest_diagnostics = evaluation["ingest_diagnostics"]
-    lines = [
-        "# Evaluation Summary",
-        "",
-        "## Headline",
-        f"- Overall evaluation status: `{'pass' if evaluation['summary']['passes'] else 'fail'}`",
-        f"- Total detections: `{evaluation['summary']['total_detection_count']}`",
-        f"- Unexpected detections: `{evaluation['summary']['unexpected_detection_count']}`",
-        f"- Missed expected events: `{evaluation['summary']['missed_expected_event_count']}`",
-        "",
-        "## Scenario Coverage",
+    dead_letters = workspace.list_dead_letters()
+    if not workspace.load_ops_metadata():
+        collect_ops_metadata(workspace)
+    capability = build_source_capability_matrix(workspace)
+    sources = capability["sources"]
+    seeded_sources = [source for source, details in sources.items() if details["normalized_event_count"] > 0]
+    contract_ready_sources = [
+        source
+        for source, details in sources.items()
+        if details["normalized_event_count"] > 0
+        and not details["missing_required_event_types"]
+        and not details["missing_required_fields"]
+        and details["dead_letter_count"] == 0
     ]
-    for scenario, result in evaluation["results"].items():
-        lines.append(
-            "- "
-            + f"`{scenario}`: status=`{result['status']}`, "
-            + f"expected_events=`{result['expected_event_count']}`, "
-            + f"matching_detections=`{result['matching_detection_count']}`"
-        )
-    lines.extend(
-        [
-            "",
-            "## Source Metrics",
-        ]
-    )
-    for source, metrics in evaluation["source_metrics"].items():
-        lines.append(
-            "- "
-            + f"`{source}`: raw_events=`{metrics['raw_event_count']}`, "
-            + f"detections=`{metrics['detection_count']}`, "
-            + f"unexpected_detections=`{metrics['unexpected_detection_count']}`, "
-            + f"dead_letters=`{metrics['dead_letter_count']}`"
-        )
-    lines.extend(
-        [
-            "",
-            "## Ingest Diagnostics",
-            f"- Dead letters: `{ingest_diagnostics['dead_letter_count']}`",
-            f"- Dead-letter reasons: `{ingest_diagnostics['dead_letter_reason_counts']}`",
-        ]
-    )
-    lines.extend(
-        [
-            "",
-            "## Current Decision Signals",
-            "- The PoC currently shows zero unexpected detections on baseline, benign-control, and initial benign-drift events."
-            if not evaluation["unexpected_detections"]
-            else "- The PoC still leaks detections onto baseline or benign-context events.",
-            "- The fixed source pack produces evidence-backed detections across identity, code, collaboration, and data sources.",
-            "- The ingest path now distinguishes valid telemetry from malformed or unsupported events instead of pretending every source delivery is trustworthy.",
-            "- The next product question is whether the same contracts survive a much broader benign-drift set and more realistic source variability.",
-            "",
-            "## Active Detections",
-            _format_detection_bullets(detections),
-        ]
-    )
-    if evaluation["missed_expected_events"]:
-        lines.extend(["", "## Missed Expected Events"])
-        for item in evaluation["missed_expected_events"]:
-            lines.append(
-                "- "
-                + f"`{item['source_event_id']}` from `{item['source']}` "
-                + f"for scenario `{item['scenario']}` on resource `{item['resource_id']}`"
-            )
-    return "\n".join(lines) + "\n"
+    detection_scenarios = sorted({item["scenario"] for item in detections})
+    return {
+        "detections": detections,
+        "dead_letters": dead_letters,
+        "source_count": len(sources),
+        "seeded_source_count": len(seeded_sources),
+        "contract_ready_source_count": len(contract_ready_sources),
+        "detection_scenarios": detection_scenarios,
+    }
 
 
 def build_conversation_pack_markdown(workspace: Workspace) -> str:
-    evaluation = evaluate_scenarios(workspace)
+    metrics = _build_report_metrics(workspace)
+    detection_scenarios = metrics["detection_scenarios"]
+    detection_labels = ", ".join(f"`{scenario}`" for scenario in detection_scenarios) or "`none`"
     return f"""# Founder And Design-Partner Conversation Pack
 
 ## What The Current PoC Proves
 - The current BYOC-friendly contracts support a fixed four-source pack: Okta, Google Workspace, GitHub, and Snowflake.
 - The current substrate can ingest synthetic telemetry, retain derived state, rebuild after raw-data deletion, and produce evidence-backed detections.
-- The current scorer detects the fixed privileged behavior pack with no leakage on the current benign drift controls, including approved travel, incident response access, and finance-close access.
+- The current scorer surfaces a small set of concrete high-risk detections across identity, code, collaboration, and data workflows without requiring a bespoke analyst workflow.
 - The current ingest path can also classify malformed or unsupported source events into dead letters without contaminating normalized analytics.
 - The current onboarding layer can validate a candidate fixture bundle against the fixed source-pack contract before import.
 - The current real-source productization layer can validate vendor-shaped export bundles and map them into the raw-event contract.
@@ -115,24 +74,24 @@ def build_conversation_pack_markdown(workspace: Workspace) -> str:
 - Which customer asks are reusable product surface, and which would drag the company toward services work?
 
 ## Current PoC Metrics
-- Overall evaluation status: `{"pass" if evaluation["summary"]["passes"] else "fail"}`
-- Total detections: `{evaluation["summary"]["total_detection_count"]}`
-- Unexpected detections: `{evaluation["summary"]["unexpected_detection_count"]}`
-- Missed expected events: `{evaluation["summary"]["missed_expected_event_count"]}`
-- Dead letters: `{evaluation["ingest_diagnostics"]["dead_letter_count"]}`
+- Total detections: `{len(metrics["detections"])}` 
+- Detection types observed: {detection_labels}
+- Dead letters: `{len(metrics["dead_letters"])}` 
+- Sources with normalized telemetry: `{metrics["seeded_source_count"]}/{metrics["source_count"]}`
+- Source contracts fully satisfied: `{metrics["contract_ready_source_count"]}/{metrics["source_count"]}`
 
 ## Next Build Priorities
 - Expand beyond the current benign-drift controls into much richer drift and source-realism fixtures.
 - Add stronger investigation summaries and peer-comparison views to make evidence review more reusable.
 - Split the scorer into multiple detector types with a fused explanation layer.
 - Extend the current source manifest and fixture validation flow into a stronger onboarding package with more semi-real and customer-provided fixtures.
+
+## Active Detections
+{_format_detection_bullets(metrics["detections"])}
 """
 
 
 def export_founder_artifacts(workspace: Workspace) -> dict[str, str]:
-    detections = workspace.list_detections()
-    evaluation = evaluate_scenarios(workspace)
-
     source_inventory = """# Source Inventory
 
 ## Fixed PoC Source Pack
@@ -181,14 +140,6 @@ flowchart LR
 - Only deployment health, inventory, and optional redacted operational metrics may leave.
 """
 
-    scenario_outputs = "# Evidence-Backed Scenario Outputs\n\n"
-    scenario_outputs += "## Scenario Evaluation\n"
-    scenario_outputs += "```json\n"
-    scenario_outputs += json.dumps(evaluation, indent=2, sort_keys=True)
-    scenario_outputs += "\n```\n\n## Detections\n```json\n"
-    scenario_outputs += json.dumps(detections, indent=2, sort_keys=True)
-    scenario_outputs += "\n```\n"
-
     artifacts = {
         "source-manifest.json": json.dumps(build_source_manifest(), indent=2, sort_keys=True) + "\n",
         "vendor-source-manifest.json": json.dumps(build_vendor_source_manifest(), indent=2, sort_keys=True) + "\n",
@@ -196,8 +147,6 @@ flowchart LR
         "source-capability-matrix.md": build_source_capability_markdown(workspace),
         "retention-matrix.md": retention_matrix,
         "deployment-boundary.md": deployment_boundary,
-        "scenario-outputs.md": scenario_outputs,
-        "evaluation-summary.md": build_evaluation_summary_markdown(workspace),
         "conversation-pack.md": build_conversation_pack_markdown(workspace),
     }
     for name, content in artifacts.items():

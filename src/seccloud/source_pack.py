@@ -54,6 +54,7 @@ def build_source_capability_matrix(workspace: Workspace) -> dict[str, Any]:
         sources[source] = {
             "display_name": contract["display_name"],
             "required_event_types": required_event_types,
+            "required_fields": required_fields,
             "seen_event_types": seen_event_types,
             "missing_required_event_types": sorted(set(required_event_types) - set(seen_event_types)),
             "required_field_coverage": field_coverage,

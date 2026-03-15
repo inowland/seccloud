@@ -3,16 +3,18 @@
   "version": "1.0.0",
   "description": "This repo contains a synthetic-first PoC for a BYOC insider-risk substrate and thin investigation workflow.",
   "scripts": {
-    "lint": "npm run lint:py && npm run lint:web && npm run format:check",
-    "lint:fix": "uv run ruff check --fix src tests && uv run ruff format src tests && eslint web/src --ext .js,.jsx --fix && npm run format",
-    "lint:py": "uv run ruff check src tests && uv run ruff format --check src tests",
-    "lint:web": "eslint web/src --ext .js,.jsx",
-    "format": "uv run ruff format src tests && prettier --write \"web/**/*.{js,jsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
-    "format:check": "prettier --check \"web/**/*.{js,jsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
-    "precommit": "uv run pre-commit run --all-files",
-    "precommit:install": "uv run pre-commit install",
-    "demo:web": "vite --config web/vite.config.mjs",
-    "demo:web:build": "vite build --config web/vite.config.mjs"
+    "lint": "npm run lint:py && npm run lint:web && npm run typecheck && npm run format:check",
+    "lint:fix": "UV_CACHE_DIR=.uv-cache uv run ruff check --fix src tests scripts && UV_CACHE_DIR=.uv-cache uv run ruff format src tests scripts && eslint web/src --ext .js,.jsx,.ts,.tsx --fix && npm run format",
+    "lint:py": "UV_CACHE_DIR=.uv-cache uv run ruff check src tests scripts && UV_CACHE_DIR=.uv-cache uv run ruff format --check src tests scripts",
+    "lint:web": "eslint web/src --ext .js,.jsx,.ts,.tsx",
+    "generate:api-types": "UV_CACHE_DIR=.uv-cache uv run python scripts/generate_openapi.py && openapi-typescript web/openapi.json -o web/src/api.generated.ts",
+    "typecheck": "tsc --noEmit --project web/tsconfig.json",
+    "format": "UV_CACHE_DIR=.uv-cache uv run ruff format src tests scripts && prettier --write \"web/**/*.{js,jsx,ts,tsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
+    "format:check": "prettier --check \"web/**/*.{js,jsx,ts,tsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
+    "precommit": "UV_CACHE_DIR=.uv-cache uv run pre-commit run --all-files",
+    "precommit:install": "UV_CACHE_DIR=.uv-cache uv run pre-commit install",
+    "web": "vite --config web/vite.config.mjs",
+    "web:build": "vite build --config web/vite.config.mjs"
   },
   "keywords": [],
   "author": "",
@@ -26,10 +28,15 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "eslint": "^9.39.4",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "globals": "^17.4.0",
-    "prettier": "^3.8.1"
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.0"
   }
 }
