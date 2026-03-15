@@ -20,7 +20,7 @@ repos:
         name: eslint
         entry: npx eslint --fix --max-warnings=0
         language: system
-        files: ^web/src/.*\.(js|jsx)$
+        files: ^web/src/.*\.(js|jsx|ts|tsx)$
 
       - id: prettier
         name: prettier

@@ -4,9 +4,9 @@
   "description": "This repo contains a synthetic-first PoC for a BYOC insider-risk substrate and thin investigation workflow.",
   "scripts": {
     "lint": "npm run lint:py && npm run lint:web && npm run typecheck && npm run format:check",
-    "lint:fix": "uv run ruff check --fix src tests scripts && uv run ruff format src tests scripts && eslint web/src --ext .js,.jsx,.ts,.tsx --fix && npm run format",
+    "lint:fix": "uv run ruff check --fix src tests scripts && uv run ruff format src tests scripts && eslint web/src --fix && npm run format",
     "lint:py": "uv run ruff check src tests scripts && uv run ruff format --check src tests scripts",
-    "lint:web": "eslint web/src --ext .js,.jsx,.ts,.tsx",
+    "lint:web": "eslint web/src",
     "generate:api-types": "uv run python scripts/generate_openapi.py && openapi-typescript web/openapi.json -o web/src/api.generated.ts",
     "typecheck": "tsc --noEmit --project web/tsconfig.json",
     "format": "uv run ruff format src tests scripts && prettier --write \"web/**/*.{js,jsx,ts,tsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
