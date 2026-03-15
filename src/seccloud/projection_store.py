@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 
 from seccloud.pipeline import sanitize_ops_metadata
@@ -36,26 +37,35 @@ def _now_timestamp() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _tbl(name: str) -> sql.Identifier:
+    return sql.Identifier(name)
+
+
 def ensure_projection_schema(conn: psycopg.Connection) -> None:
+    pe = _tbl(PROJECTED_EVENTS_TABLE)
+    pd = _tbl(PROJECTED_DETECTIONS_TABLE)
+    ps = _tbl(PROJECTION_STATE_TABLE)
+    hei = _tbl(HOT_EVENT_INDEX_TABLE)
+    dee = _tbl(DETECTION_EVENT_EDGE_TABLE)
     with conn.cursor() as cur:
         cur.execute(
-            f"""
-            create table if not exists {PROJECTED_EVENTS_TABLE} (
+            sql.SQL("""
+            create table if not exists {pe} (
               event_id text primary key,
               observed_at timestamptz not null,
               payload jsonb not null
             );
-            create table if not exists {PROJECTED_DETECTIONS_TABLE} (
+            create table if not exists {pd} (
               tenant_id text not null,
               detection_id text primary key,
               observed_at timestamptz not null,
               payload jsonb not null
             );
-            create table if not exists {PROJECTION_STATE_TABLE} (
+            create table if not exists {ps} (
               key text primary key,
               payload jsonb not null
             );
-            create table if not exists {HOT_EVENT_INDEX_TABLE} (
+            create table if not exists {hei} (
               tenant_id text not null,
               event_id text primary key,
               event_key text not null,
@@ -85,10 +95,10 @@ def ensure_projection_schema(conn: psycopg.Connection) -> None:
               indexed_at timestamptz not null,
               updated_at timestamptz not null
             );
-            create table if not exists {DETECTION_EVENT_EDGE_TABLE} (
+            create table if not exists {dee} (
               tenant_id text not null,
               detection_id text not null,
-              event_id text not null references {HOT_EVENT_INDEX_TABLE}(event_id),
+              event_id text not null references {hei}(event_id),
               ordinal integer not null,
               link_role text not null,
               observed_at timestamptz not null,
@@ -96,33 +106,33 @@ def ensure_projection_schema(conn: psycopg.Connection) -> None:
               primary key (tenant_id, detection_id, event_id)
             );
             create unique index if not exists hot_event_index_tenant_event_key_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, event_key);
+              on {hei} (tenant_id, event_key);
             create index if not exists hot_event_index_tenant_observed_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, observed_at desc, event_id desc);
+              on {hei} (tenant_id, observed_at desc, event_id desc);
             create index if not exists hot_event_index_tenant_source_observed_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, source, observed_at desc, event_id desc);
+              on {hei} (tenant_id, source, observed_at desc, event_id desc);
             create index if not exists hot_event_index_tenant_integration_observed_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, integration_id, observed_at desc, event_id desc);
+              on {hei} (tenant_id, integration_id, observed_at desc, event_id desc);
             create index if not exists hot_event_index_tenant_principal_entity_observed_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, principal_entity_id, observed_at desc, event_id desc);
+              on {hei} (tenant_id, principal_entity_id, observed_at desc, event_id desc);
             create index if not exists hot_event_index_tenant_resource_entity_observed_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, resource_entity_id, observed_at desc, event_id desc);
+              on {hei} (tenant_id, resource_entity_id, observed_at desc, event_id desc);
             create index if not exists hot_event_index_tenant_action_category_observed_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, action_category, observed_at desc, event_id desc);
+              on {hei} (tenant_id, action_category, observed_at desc, event_id desc);
             create index if not exists hot_event_index_tenant_action_verb_observed_idx
-              on {HOT_EVENT_INDEX_TABLE} (tenant_id, action_verb, observed_at desc, event_id desc);
+              on {hei} (tenant_id, action_verb, observed_at desc, event_id desc);
             create unique index if not exists detection_event_edge_tenant_detection_ordinal_idx
-              on {DETECTION_EVENT_EDGE_TABLE} (tenant_id, detection_id, ordinal);
+              on {dee} (tenant_id, detection_id, ordinal);
             create index if not exists detection_event_edge_tenant_event_idx
-              on {DETECTION_EVENT_EDGE_TABLE} (tenant_id, event_id, observed_at desc, detection_id desc);
-            alter table {PROJECTED_DETECTIONS_TABLE}
+              on {dee} (tenant_id, event_id, observed_at desc, detection_id desc);
+            alter table {pd}
               add column if not exists tenant_id text;
-            update {PROJECTED_DETECTIONS_TABLE}
+            update {pd}
               set tenant_id = coalesce(tenant_id, payload->>'tenant_id')
               where tenant_id is null;
             create index if not exists projected_detections_tenant_observed_idx
-              on {PROJECTED_DETECTIONS_TABLE} (tenant_id, observed_at desc, detection_id desc);
-            """
+              on {pd} (tenant_id, observed_at desc, detection_id desc);
+            """).format(pe=pe, pd=pd, ps=ps, hei=hei, dee=dee)
         )
     conn.commit()
 
@@ -130,14 +140,20 @@ def ensure_projection_schema(conn: psycopg.Connection) -> None:
 def reset_projection_schema(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            f"""
+            sql.SQL("""
             drop table if exists projected_cases;
-            drop table if exists {DETECTION_EVENT_EDGE_TABLE};
-            drop table if exists {HOT_EVENT_INDEX_TABLE};
-            drop table if exists {PROJECTION_STATE_TABLE};
-            drop table if exists {PROJECTED_DETECTIONS_TABLE};
-            drop table if exists {PROJECTED_EVENTS_TABLE};
-            """
+            drop table if exists {dee};
+            drop table if exists {hei};
+            drop table if exists {ps};
+            drop table if exists {pd};
+            drop table if exists {pe};
+            """).format(
+                dee=_tbl(DETECTION_EVENT_EDGE_TABLE),
+                hei=_tbl(HOT_EVENT_INDEX_TABLE),
+                ps=_tbl(PROJECTION_STATE_TABLE),
+                pd=_tbl(PROJECTED_DETECTIONS_TABLE),
+                pe=_tbl(PROJECTED_EVENTS_TABLE),
+            )
         )
     ensure_projection_schema(conn)
     conn.commit()
@@ -152,7 +168,10 @@ def _delete_rows_by_ids(
 ) -> None:
     if not ids:
         return
-    cur.execute(f"delete from {table} where {id_column} = any(%s)", (ids,))
+    cur.execute(
+        sql.SQL("delete from {table} where {col} = any(%s)").format(table=_tbl(table), col=sql.Identifier(id_column)),
+        (ids,),
+    )
 
 
 def _delete_tenant_rows_by_ids(
@@ -165,7 +184,12 @@ def _delete_tenant_rows_by_ids(
 ) -> None:
     if not ids:
         return
-    cur.execute(f"delete from {table} where tenant_id = %s and {id_column} = any(%s)", (tenant_id, ids))
+    cur.execute(
+        sql.SQL("delete from {table} where tenant_id = %s and {col} = any(%s)").format(
+            table=_tbl(table), col=sql.Identifier(id_column)
+        ),
+        (tenant_id, ids),
+    )
 
 
 def _select_stale_tenant_ids(
@@ -176,22 +200,24 @@ def _select_stale_tenant_ids(
     id_column: str,
     current_ids: list[str],
 ) -> list[str]:
+    tbl = _tbl(table)
+    col = sql.Identifier(id_column)
     if current_ids:
         cur.execute(
-            f"""
-            select distinct {id_column} as id
+            sql.SQL("""
+            select distinct {col} as id
             from {table}
-            where tenant_id = %s and not ({id_column} = any(%s))
-            """,
+            where tenant_id = %s and not ({col} = any(%s))
+            """).format(col=col, table=tbl),
             (tenant_id, current_ids),
         )
     else:
         cur.execute(
-            f"""
-            select distinct {id_column} as id
+            sql.SQL("""
+            select distinct {col} as id
             from {table}
             where tenant_id = %s
-            """,
+            """).format(col=col, table=tbl),
             (tenant_id,),
         )
     return [row["id"] for row in cur.fetchall()]
@@ -297,10 +323,15 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         ensure_projection_schema(conn)
         with conn.cursor() as cur:
+            hei = _tbl(HOT_EVENT_INDEX_TABLE)
+            pe = _tbl(PROJECTED_EVENTS_TABLE)
+            pd = _tbl(PROJECTED_DETECTIONS_TABLE)
+            dee = _tbl(DETECTION_EVENT_EDGE_TABLE)
+            ps = _tbl(PROJECTION_STATE_TABLE)
             for row in indexed_rows:
                 cur.execute(
-                    f"""
-                    insert into {HOT_EVENT_INDEX_TABLE} (
+                    sql.SQL("""
+                    insert into {hei} (
                       tenant_id, event_id, event_key, normalized_schema_version, source, integration_id,
                       source_event_id, observed_at, principal_entity_id, principal_id,
                       principal_display_name, principal_email, principal_department,
@@ -346,7 +377,7 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                       raw_pointer = excluded.raw_pointer,
                       raw_retention_state = excluded.raw_retention_state,
                       updated_at = excluded.updated_at
-                    """,
+                    """).format(hei=hei),
                     {
                         **row,
                         "environment": json.dumps(row["environment"]),
@@ -357,8 +388,8 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                     },
                 )
                 cur.execute(
-                    f"""
-                    insert into {PROJECTED_EVENTS_TABLE} (
+                    sql.SQL("""
+                    insert into {pe} (
                       event_id, observed_at, payload
                     ) values (
                       %(event_id)s, %(observed_at)s, %(payload)s::jsonb
@@ -366,7 +397,7 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                     on conflict (event_id) do update set
                       observed_at = excluded.observed_at,
                       payload = excluded.payload
-                    """,
+                    """).format(pe=pe),
                     {
                         "event_id": row["event_id"],
                         "observed_at": row["observed_at"],
@@ -398,8 +429,8 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
             for detection in detections:
                 anchor_event = event_lookup[detection["event_ids"][0]]
                 cur.execute(
-                    f"""
-                    insert into {PROJECTED_DETECTIONS_TABLE} (
+                    sql.SQL("""
+                    insert into {pd} (
                       tenant_id, detection_id, observed_at, payload
                     ) values (
                       %(tenant_id)s, %(detection_id)s, %(observed_at)s, %(payload)s::jsonb
@@ -408,7 +439,7 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                       tenant_id = excluded.tenant_id,
                       observed_at = excluded.observed_at,
                       payload = excluded.payload
-                    """,
+                    """).format(pd=pd),
                     {
                         "tenant_id": workspace.tenant_id,
                         "detection_id": detection["detection_id"],
@@ -417,23 +448,23 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                     },
                 )
                 cur.execute(
-                    f"""
-                    delete from {DETECTION_EVENT_EDGE_TABLE}
+                    sql.SQL("""
+                    delete from {dee}
                     where tenant_id = %s and detection_id = %s
-                    """,
+                    """).format(dee=dee),
                     (workspace.tenant_id, detection["detection_id"]),
                 )
                 for ordinal, event_id in enumerate(detection["event_ids"]):
                     linked_event = event_lookup[event_id]
                     cur.execute(
-                        f"""
-                        insert into {DETECTION_EVENT_EDGE_TABLE} (
+                        sql.SQL("""
+                        insert into {dee} (
                           tenant_id, detection_id, event_id, ordinal, link_role, observed_at, created_at
                         ) values (
                           %(tenant_id)s, %(detection_id)s, %(event_id)s, %(ordinal)s,
                           %(link_role)s, %(observed_at)s, %(created_at)s
                         )
-                        """,
+                        """).format(dee=dee),
                         {
                             "tenant_id": workspace.tenant_id,
                             "detection_id": detection["detection_id"],
@@ -471,11 +502,11 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
             }
             for key, payload in states.items():
                 cur.execute(
-                    f"""
-                    insert into {PROJECTION_STATE_TABLE} (key, payload)
+                    sql.SQL("""
+                    insert into {ps} (key, payload)
                     values (%s, %s::jsonb)
                     on conflict (key) do update set payload = excluded.payload
-                    """,
+                    """).format(ps=ps),
                     (key, json.dumps(payload)),
                 )
         conn.commit()
@@ -491,9 +522,10 @@ def fetch_projection_overview(dsn: str | None = None) -> dict[str, Any]:
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         ensure_projection_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(f"select payload from {PROJECTION_STATE_TABLE} where key = 'stream_state'")
+            ps = _tbl(PROJECTION_STATE_TABLE)
+            cur.execute(sql.SQL("select payload from {ps} where key = 'stream_state'").format(ps=ps))
             stream_state = cur.fetchone()
-            cur.execute(f"select payload from {PROJECTION_STATE_TABLE} where key = 'ops_metadata'")
+            cur.execute(sql.SQL("select payload from {ps} where key = 'ops_metadata'").format(ps=ps))
             ops_metadata = cur.fetchone()
         return {
             "stream_state": (
@@ -515,12 +547,12 @@ def fetch_projection_overview(dsn: str | None = None) -> dict[str, Any]:
 
 def _paginate_rows(
     *,
-    query: str,
+    query: sql.Composed,
     params: tuple[Any, ...],
     limit: int,
     offset: int,
     include_total: bool = True,
-    count_query: str | None = None,
+    count_query: sql.Composed | None = None,
     dsn: str | None = None,
 ) -> dict[str, Any]:
     dsn = dsn or default_projection_dsn()
@@ -529,7 +561,7 @@ def _paginate_rows(
         with conn.cursor() as cur:
             total = None
             if include_total and count_query is not None:
-                cur.execute(count_query, params[:1] if "%s" in count_query else ())
+                cur.execute(count_query, params[:1])
                 total = cur.fetchone()["count"]
                 query_limit = limit
             else:
@@ -558,11 +590,11 @@ def fetch_projected_events(
     dsn: str | None = None,
 ) -> dict[str, Any]:
     return _paginate_rows(
-        query=(
-            f"select event_payload as payload from {HOT_EVENT_INDEX_TABLE} "
+        query=sql.SQL(
+            "select event_payload as payload from {hei} "
             "where tenant_id = %s "
             "order by observed_at desc, event_id desc limit %s offset %s"
-        ),
+        ).format(hei=_tbl(HOT_EVENT_INDEX_TABLE)),
         params=(tenant_id,),
         limit=limit,
         offset=offset,
@@ -578,19 +610,19 @@ def fetch_projected_detections(
     offset: int = 0,
     dsn: str | None = None,
 ) -> dict[str, Any]:
+    pd = _tbl(PROJECTED_DETECTIONS_TABLE)
     return _paginate_rows(
-        query=(
-            f"select payload from {PROJECTED_DETECTIONS_TABLE} "
+        query=sql.SQL(
+            "select payload from {pd} "
             "where tenant_id = %s and coalesce(payload->>'status', 'open') = 'open' "
             "order by observed_at desc, detection_id desc limit %s offset %s"
-        ),
+        ).format(pd=pd),
         params=(tenant_id,),
         limit=limit,
         offset=offset,
-        count_query=(
-            f"select count(*) as count from {PROJECTED_DETECTIONS_TABLE} "
-            "where tenant_id = %s and coalesce(payload->>'status', 'open') = 'open'"
-        ),
+        count_query=sql.SQL(
+            "select count(*) as count from {pd} where tenant_id = %s and coalesce(payload->>'status', 'open') = 'open'"
+        ).format(pd=pd),
         dsn=dsn,
     )
 
@@ -606,11 +638,11 @@ def fetch_hot_event_detail(
         ensure_projection_schema(conn)
         with conn.cursor() as cur:
             cur.execute(
-                f"""
+                sql.SQL("""
                 select event_payload, normalized_pointer, raw_pointer, raw_retention_state
-                from {HOT_EVENT_INDEX_TABLE}
+                from {hei}
                 where tenant_id = %s and event_id = %s
-                """,
+                """).format(hei=_tbl(HOT_EVENT_INDEX_TABLE)),
                 (tenant_id, event_id),
             )
             row = cur.fetchone()
@@ -635,13 +667,13 @@ def fetch_detection_linked_events(
         ensure_projection_schema(conn)
         with conn.cursor() as cur:
             cur.execute(
-                f"""
+                sql.SQL("""
                 select hei.event_payload as payload
-                from {DETECTION_EVENT_EDGE_TABLE} dee
-                join {HOT_EVENT_INDEX_TABLE} hei on hei.event_id = dee.event_id
+                from {dee} dee
+                join {hei} hei on hei.event_id = dee.event_id
                 where dee.tenant_id = %s and dee.detection_id = %s
                 order by dee.ordinal asc
-                """,
+                """).format(dee=_tbl(DETECTION_EVENT_EDGE_TABLE), hei=_tbl(HOT_EVENT_INDEX_TABLE)),
                 (tenant_id, detection_id),
             )
             rows = cur.fetchall()
@@ -656,26 +688,29 @@ def fetch_timeline_events(
     limit: int = 25,
     dsn: str | None = None,
 ) -> list[dict[str, Any]]:
-    filters = ["tenant_id = %s"]
+    filters = [sql.SQL("tenant_id = %s")]
     params: list[Any] = [tenant_id]
     if principal_reference is not None:
-        filters.append("(principal_entity_id = %s or principal_id = %s)")
+        filters.append(sql.SQL("(principal_entity_id = %s or principal_id = %s)"))
         params.extend([principal_reference, principal_reference])
     if resource_reference is not None:
-        filters.append("(resource_entity_id = %s or resource_id = %s)")
+        filters.append(sql.SQL("(resource_entity_id = %s or resource_id = %s)"))
         params.extend([resource_reference, resource_reference])
     dsn = dsn or default_projection_dsn()
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         ensure_projection_schema(conn)
         with conn.cursor() as cur:
             cur.execute(
-                f"""
+                sql.SQL("""
                 select event_payload as payload
-                from {HOT_EVENT_INDEX_TABLE}
-                where {" and ".join(filters)}
+                from {hei}
+                where {where}
                 order by observed_at desc, event_id desc
                 limit %s
-                """,
+                """).format(
+                    hei=_tbl(HOT_EVENT_INDEX_TABLE),
+                    where=sql.SQL(" and ").join(filters),
+                ),
                 (*params, limit),
             )
             rows = cur.fetchall()

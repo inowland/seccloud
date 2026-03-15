@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import gzip
 import json
 import os
@@ -81,16 +80,21 @@ class PushIngestionTestCase(unittest.TestCase):
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, object]:
-        intake_endpoint = next(
-            route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/intake/raw-events"
-        )
-        return asyncio.run(
-            intake_endpoint(
-                request=self._build_request(payload),
-                authorization="Bearer push-token",
-                idempotency_key=idempotency_key,
-            )
-        )
+        from starlette.testclient import TestClient
+
+        client = TestClient(app)
+        body = gzip.compress(json.dumps(payload).encode("utf-8"))
+        headers = {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer push-token",
+        }
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
+        response = client.post("/api/intake/raw-events", content=body, headers=headers)
+        if response.status_code >= 400:
+            raise seccloud_api.HTTPException(status_code=response.status_code, detail=response.json().get("detail", ""))
+        return response.json()
 
     def test_push_ingestion_accepts_valid_compressed_batch(self) -> None:
         app = self._create_app()
@@ -150,6 +154,8 @@ class PushIngestionTestCase(unittest.TestCase):
         self.assertEqual(envelopes[0]["integration_id"], "okta-primary")
 
     def test_push_ingestion_rejects_invalid_batch_shape(self) -> None:
+        from starlette.testclient import TestClient
+
         app = self._create_app()
         payload = {
             "source": "okta",
@@ -162,20 +168,20 @@ class PushIngestionTestCase(unittest.TestCase):
             ],
         }
 
-        intake_endpoint = next(
-            route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/intake/raw-events"
+        client = TestClient(app)
+        body = gzip.compress(json.dumps(payload).encode("utf-8"))
+        response = client.post(
+            "/api/intake/raw-events",
+            content=body,
+            headers={
+                "Content-Encoding": "gzip",
+                "Content-Type": "application/json",
+                "Authorization": "Bearer push-token",
+            },
         )
-        with self.assertRaises(seccloud_api.HTTPException) as exc:
-            asyncio.run(
-                intake_endpoint(
-                    request=self._build_request(payload),
-                    authorization="Bearer push-token",
-                    idempotency_key=None,
-                )
-            )
 
-        self.assertEqual(exc.exception.status_code, 400)
-        self.assertIn("record_source_mismatch", exc.exception.detail)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("record_source_mismatch", response.json()["detail"])
         self.assertEqual(len(self.workspace.list_pending_intake_batches()), 0)
 
     def test_push_ingestion_dedupes_duplicate_submission(self) -> None:

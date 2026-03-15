@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ApiSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
 
 class Health(ApiSchema):
