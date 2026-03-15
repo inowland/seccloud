@@ -22,6 +22,10 @@ class ObjectStore(Protocol):
 
     def get_json(self, object_key: str, default: Any = None) -> Any: ...
 
+    def put_bytes(self, object_key: str, payload: bytes, *, content_type: str | None = None) -> str: ...
+
+    def get_bytes(self, object_key: str, default: bytes | None = None) -> bytes | None: ...
+
     def delete(self, object_key: str) -> None: ...
 
     def list_json(self, prefix: str = "") -> list[tuple[str, Any]]: ...
@@ -38,6 +42,18 @@ class LocalObjectStore:
 
     def get_json(self, object_key: str, default: Any = None) -> Any:
         return _read_json(self.root / object_key, default)
+
+    def put_bytes(self, object_key: str, payload: bytes, *, content_type: str | None = None) -> str:
+        path = self.root / object_key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        return object_key
+
+    def get_bytes(self, object_key: str, default: bytes | None = None) -> bytes | None:
+        path = self.root / object_key
+        if not path.exists():
+            return default
+        return path.read_bytes()
 
     def delete(self, object_key: str) -> None:
         path = self.root / object_key
@@ -106,6 +122,25 @@ class S3ObjectStore:
                 return default
             raise
         return json.loads(response["Body"].read().decode("utf-8"))
+
+    def put_bytes(self, object_key: str, payload: bytes, *, content_type: str | None = None) -> str:
+        self._client.put_object(
+            Bucket=self.bucket,
+            Key=self._full_key(object_key),
+            Body=payload,
+            ContentType=content_type or "application/octet-stream",
+        )
+        return object_key
+
+    def get_bytes(self, object_key: str, default: bytes | None = None) -> bytes | None:
+        try:
+            response = self._client.get_object(Bucket=self.bucket, Key=self._full_key(object_key))
+        except Exception as exc:  # pragma: no cover - depends on optional boto3 runtime
+            error_code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+            if error_code in {"NoSuchKey", "404"}:
+                return default
+            raise
+        return response["Body"].read()
 
     def delete(self, object_key: str) -> None:
         self._client.delete_object(Bucket=self.bucket, Key=self._full_key(object_key))

@@ -7,6 +7,10 @@ from seccloud.synthetic import generate_synthetic_dataset
 from seccloud.workers import submit_grouped_raw_events
 
 
+def _active_detection_count(workspace: Workspace) -> int:
+    return sum(1 for detection in workspace.list_detections() if detection.get("status", "open") == "open")
+
+
 def _stream_manifest_path(workspace: Workspace):
     return workspace.manifests_dir / "runtime_stream_manifest.json"
 
@@ -148,5 +152,5 @@ def get_runtime_stream_state(workspace: Workspace) -> dict[str, Any]:
         "total_source_events": manifest["total_source_events"],
         "complete": manifest["complete"],
         "normalized_event_count": len(workspace.list_normalized_events()),
-        "detection_count": len(workspace.list_detections()),
+        "detection_count": _active_detection_count(workspace),
     }

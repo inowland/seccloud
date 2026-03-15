@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ApiSchema(BaseModel):
@@ -18,15 +18,21 @@ class IntakeRequest(ApiSchema):
     intake_kind: str = "push_gateway"
     integration_id: str | None = None
     received_at: str | None = None
-    records: list[dict[str, Any]]
+    records: list[dict[str, Any]] = Field(min_length=1)
     metadata: dict[str, Any] | None = None
 
 
 class IntakeAccepted(ApiSchema):
     batch_id: str
+    tenant_id: str
     source: str
+    integration_id: str
     record_count: int
-    path: str
+    manifest_key: str
+    object_key: str
+    idempotency_key: str
+    duplicate: bool
+    queue_path: str
 
 
 class EvidencePointer(ApiSchema):

@@ -38,6 +38,11 @@ const eventsPageSize = 14;
 const splitPaneStorageKey = "seccloud.split-pane-width";
 const navPaneStorageKey = "seccloud.nav-pane-width";
 const navPaneCollapsedStorageKey = "seccloud.nav-pane-collapsed";
+const eventListColumnsStorageKey = "seccloud.events.columns";
+const eventListDensityStorageKey = "seccloud.events.density";
+const eventListSortStorageKey = "seccloud.events.sort";
+const detectionListDensityStorageKey = "seccloud.detections.density";
+const integrationListDensityStorageKey = "seccloud.integrations.density";
 const splitPaneDefaultWidth = 820;
 const splitPaneMinWidth = 320;
 const splitPaneDetailMinWidth = 360;
@@ -58,8 +63,10 @@ type JsonResponse<Path extends keyof paths, Method extends keyof paths[Path]> =
 type Overview = JsonResponse<"/api/overview", "get">;
 type DetectionList = JsonResponse<"/api/detections", "get">;
 type EventList = JsonResponse<"/api/events", "get">;
+type EventRecord = components["schemas"]["Event"];
 type EventDetail = JsonResponse<"/api/events/{event_id}", "get">;
 type DetectionDetail = JsonResponse<"/api/detections/{detection_id}", "get">;
+type Detection = components["schemas"]["Detection"];
 type SourceCapabilityMatrix = JsonResponse<"/api/source-capability", "get">;
 type SourceCapabilityDetails = components["schemas"]["SourceCapabilityDetails"];
 type Pagination = components["schemas"]["Pagination"];
@@ -95,8 +102,10 @@ interface PagerProps {
 }
 
 interface DetailPaneProps {
+  acknowledgingDetectionId: string | null;
   selectedItem: SelectedItem | null;
   detailBusy: boolean;
+  onAcknowledgeDetection: (detectionId: string) => void;
   openEventPage: (eventId: string) => void;
 }
 
@@ -140,12 +149,44 @@ interface MasterListPaneProps {
   children: ReactNode;
   footer?: ReactNode;
   tone?: SectionTone;
+  toolbarActions?: ReactNode;
 }
 
 interface ActionCard {
   title: string;
   body: string;
   tone: BadgeTone;
+}
+
+type EventColumnKey =
+  | "observedAt"
+  | "actor"
+  | "actorEmail"
+  | "action"
+  | "resource"
+  | "source"
+  | "sensitivity"
+  | "actionType"
+  | "eventId"
+  | "sourceEventId";
+
+interface EventColumnOption {
+  key: EventColumnKey;
+  label: string;
+}
+
+interface EventColumnPreset {
+  id: string;
+  label: string;
+  columns: EventColumnKey[];
+}
+
+type EventDensity = "comfortable" | "compact";
+type EventSortDirection = "asc" | "desc";
+
+interface EventSortState {
+  column: EventColumnKey;
+  direction: EventSortDirection;
 }
 
 type SelectedItem =
@@ -181,6 +222,51 @@ const emptyPagination: Pagination = {
   returned: 0,
   total: null,
   has_more: false,
+};
+const eventColumnOptions: EventColumnOption[] = [
+  { key: "observedAt", label: "Observed" },
+  { key: "actor", label: "Actor" },
+  { key: "actorEmail", label: "Actor email" },
+  { key: "action", label: "Action" },
+  { key: "resource", label: "Resource" },
+  { key: "source", label: "Source" },
+  { key: "sensitivity", label: "Sensitivity" },
+  { key: "actionType", label: "Action type" },
+  { key: "eventId", label: "Event ID" },
+  { key: "sourceEventId", label: "Source event ID" },
+];
+const defaultEventColumns: EventColumnKey[] = [
+  "observedAt",
+  "actor",
+  "action",
+  "resource",
+  "source",
+  "sensitivity",
+  "actionType",
+];
+const triageEventColumns: EventColumnKey[] = [
+  "observedAt",
+  "actor",
+  "action",
+  "resource",
+  "sensitivity",
+  "actionType",
+];
+const provenanceEventColumns: EventColumnKey[] = [
+  "observedAt",
+  "actor",
+  "source",
+  "eventId",
+  "sourceEventId",
+];
+const eventColumnPresets: EventColumnPreset[] = [
+  { id: "default", label: "Default", columns: defaultEventColumns },
+  { id: "triage", label: "Triage", columns: triageEventColumns },
+  { id: "provenance", label: "Provenance", columns: provenanceEventColumns },
+];
+const defaultEventSort: EventSortState = {
+  column: "observedAt",
+  direction: "desc",
 };
 
 async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -317,7 +403,7 @@ function integrationStatus(details: SourceCapabilityDetails): {
   if (issueCount === 0 && details.normalized_last_seen_at) {
     return {
       tone: "positive",
-      label: "Ready",
+      label: "Healthy",
       note: "Contract met and normalized data is still arriving.",
     };
   }
@@ -425,7 +511,7 @@ function pageMeta(page: Page, counts: Counts): PageMeta {
     return {
       title: "Integrations",
       count: counts.integrations,
-      countLabel: "sources",
+      countLabel: "need attention",
     };
   }
   return {
@@ -491,6 +577,211 @@ function readStoredNavPaneCollapsed(): boolean {
 
 function clampNavPaneWidth(width: number): number {
   return Math.min(Math.max(width, navPaneMinWidth), navPaneMaxWidth);
+}
+
+function normalizeEventColumns(value: unknown): EventColumnKey[] {
+  const allowed = new Set<EventColumnKey>(
+    eventColumnOptions.map((option) => option.key),
+  );
+  if (!Array.isArray(value)) {
+    return defaultEventColumns;
+  }
+
+  const normalized: EventColumnKey[] = [];
+  for (const item of value) {
+    if (
+      typeof item === "string" &&
+      allowed.has(item as EventColumnKey) &&
+      !normalized.includes(item as EventColumnKey)
+    ) {
+      normalized.push(item as EventColumnKey);
+    }
+  }
+
+  return normalized.length > 0 ? normalized : defaultEventColumns;
+}
+
+function readStoredEventColumns(): EventColumnKey[] {
+  if (typeof window === "undefined") {
+    return defaultEventColumns;
+  }
+  const stored = window.localStorage.getItem(eventListColumnsStorageKey);
+  if (!stored) {
+    return defaultEventColumns;
+  }
+  try {
+    return normalizeEventColumns(JSON.parse(stored));
+  } catch {
+    return defaultEventColumns;
+  }
+}
+
+function eventColumnsEqual(
+  left: EventColumnKey[],
+  right: EventColumnKey[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((column, index) => column === right[index]);
+}
+
+function eventColumnLabel(column: EventColumnKey): string {
+  return (
+    eventColumnOptions.find((option) => option.key === column)?.label ?? column
+  );
+}
+
+function formatTokenLabel(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function sensitivityTone(value: string): BadgeTone {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "high" || normalized === "critical") {
+    return "critical";
+  }
+  if (normalized === "medium" || normalized === "internal") {
+    return "attention";
+  }
+  if (normalized === "low" || normalized === "public") {
+    return "positive";
+  }
+  return "neutral";
+}
+
+function defaultSortDirection(column: EventColumnKey): EventSortDirection {
+  if (column === "observedAt" || column === "sensitivity") {
+    return "desc";
+  }
+  return "asc";
+}
+
+function normalizeEventDensity(value: unknown): EventDensity {
+  return value === "compact" ? "compact" : "comfortable";
+}
+
+function readStoredDensity(storageKey: string): EventDensity {
+  if (typeof window === "undefined") {
+    return "comfortable";
+  }
+  return normalizeEventDensity(window.localStorage.getItem(storageKey));
+}
+
+function readStoredEventDensity(): EventDensity {
+  return readStoredDensity(eventListDensityStorageKey);
+}
+
+function normalizeEventSort(value: unknown): EventSortState {
+  if (!value || typeof value !== "object") {
+    return defaultEventSort;
+  }
+
+  const candidate = value as {
+    column?: unknown;
+    direction?: unknown;
+  };
+  const column =
+    typeof candidate.column === "string" &&
+    eventColumnOptions.some((option) => option.key === candidate.column)
+      ? (candidate.column as EventColumnKey)
+      : defaultEventSort.column;
+  const direction =
+    candidate.direction === "asc" || candidate.direction === "desc"
+      ? candidate.direction
+      : defaultSortDirection(column);
+
+  return { column, direction };
+}
+
+function readStoredEventSort(): EventSortState {
+  if (typeof window === "undefined") {
+    return defaultEventSort;
+  }
+  const stored = window.localStorage.getItem(eventListSortStorageKey);
+  if (!stored) {
+    return defaultEventSort;
+  }
+  try {
+    return normalizeEventSort(JSON.parse(stored));
+  } catch {
+    return defaultEventSort;
+  }
+}
+
+function compareText(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): number {
+  return (left ?? "").localeCompare(right ?? "", undefined, {
+    sensitivity: "base",
+  });
+}
+
+function compareSensitivity(left: string, right: string): number {
+  const rank = (value: string) => {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "critical") {
+      return 4;
+    }
+    if (normalized === "high") {
+      return 3;
+    }
+    if (normalized === "medium" || normalized === "internal") {
+      return 2;
+    }
+    if (normalized === "low" || normalized === "public") {
+      return 1;
+    }
+    return 0;
+  };
+
+  return rank(left) - rank(right);
+}
+
+function compareEvents(
+  left: EventRecord,
+  right: EventRecord,
+  sort: EventSortState,
+): number {
+  let comparison = 0;
+  if (sort.column === "observedAt") {
+    comparison =
+      new Date(left.observed_at).getTime() -
+      new Date(right.observed_at).getTime();
+  } else if (sort.column === "actor") {
+    comparison = compareText(
+      left.principal.display_name,
+      right.principal.display_name,
+    );
+  } else if (sort.column === "actorEmail") {
+    comparison = compareText(left.principal.email, right.principal.email);
+  } else if (sort.column === "action") {
+    comparison = compareText(left.action.verb, right.action.verb);
+  } else if (sort.column === "resource") {
+    comparison = compareText(left.resource.name, right.resource.name);
+  } else if (sort.column === "source") {
+    comparison = compareText(left.source, right.source);
+  } else if (sort.column === "sensitivity") {
+    comparison = compareSensitivity(
+      left.resource.sensitivity,
+      right.resource.sensitivity,
+    );
+  } else if (sort.column === "actionType") {
+    comparison = compareText(left.action.category, right.action.category);
+  } else if (sort.column === "eventId") {
+    comparison = compareText(left.event_id, right.event_id);
+  } else {
+    comparison = compareText(left.source_event_id, right.source_event_id);
+  }
+
+  if (comparison === 0) {
+    comparison = compareText(left.event_id, right.event_id);
+  }
+
+  return sort.direction === "asc" ? comparison : comparison * -1;
 }
 
 function SplitPane({ left, right, width, onResize }: SplitPaneProps) {
@@ -680,6 +971,7 @@ function MasterListPane({
   children,
   footer,
   tone = "default",
+  toolbarActions,
 }: MasterListPaneProps) {
   return (
     <Section footer={footer} tone={tone}>
@@ -693,7 +985,12 @@ function MasterListPane({
             type="search"
             value={searchValue}
           />
-          <span className="panel-note">{formatNumber(resultCount)} shown</span>
+          <div className="master-list-toolbar__actions">
+            {toolbarActions}
+            <span className="panel-note">
+              {formatNumber(resultCount)} shown
+            </span>
+          </div>
         </div>
 
         <div className="scroll-region">
@@ -710,6 +1007,490 @@ function MasterListPane({
         </div>
       </div>
     </Section>
+  );
+}
+
+interface EventColumnsMenuProps {
+  visibleColumns: EventColumnKey[];
+  onChange: (columns: EventColumnKey[]) => void;
+}
+
+function EventColumnsMenu({ visibleColumns, onChange }: EventColumnsMenuProps) {
+  function toggleColumn(column: EventColumnKey) {
+    const current = new Set(visibleColumns);
+    if (current.has(column)) {
+      if (visibleColumns.length === 1) {
+        return;
+      }
+      current.delete(column);
+    } else {
+      current.add(column);
+    }
+
+    onChange(
+      eventColumnOptions
+        .map((option) => option.key)
+        .filter((key) => current.has(key)),
+    );
+  }
+
+  return (
+    <details className="toolbar-menu">
+      <summary className="toolbar-menu__summary toolbar-button">
+        Columns
+        <span className="toolbar-menu__summary-count">
+          {formatNumber(visibleColumns.length)}
+        </span>
+      </summary>
+      <div className="toolbar-menu__panel">
+        <div className="toolbar-menu__section">
+          <span className="toolbar-menu__label">Presets</span>
+          <div className="toolbar-menu__presets">
+            {eventColumnPresets.map((preset) => (
+              <button
+                className={
+                  eventColumnsEqual(visibleColumns, preset.columns)
+                    ? "toolbar-chip toolbar-chip--selected"
+                    : "toolbar-chip"
+                }
+                key={preset.id}
+                onClick={() => onChange(preset.columns)}
+                type="button"
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="toolbar-menu__section">
+          <span className="toolbar-menu__label">Visible columns</span>
+          <div className="toolbar-menu__options">
+            {eventColumnOptions.map((option) => {
+              const checked = visibleColumns.includes(option.key);
+              return (
+                <label className="toolbar-menu__option" key={option.key}>
+                  <input
+                    checked={checked}
+                    disabled={checked && visibleColumns.length === 1}
+                    onChange={() => toggleColumn(option.key)}
+                    type="checkbox"
+                  />
+                  <span>{option.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+interface EventDensityToggleProps {
+  density: EventDensity;
+  onChange: (density: EventDensity) => void;
+}
+
+function EventDensityToggle({ density, onChange }: EventDensityToggleProps) {
+  return (
+    <button
+      aria-label="Toggle density"
+      className="toolbar-button toolbar-button--density"
+      onClick={() =>
+        onChange(density === "comfortable" ? "compact" : "comfortable")
+      }
+      title={`Switch to ${
+        density === "comfortable" ? "compact" : "comfortable"
+      } density`}
+      type="button"
+    >
+      Density
+      <span className="toolbar-menu__summary-count">
+        {density === "comfortable" ? "Comfortable" : "Compact"}
+      </span>
+    </button>
+  );
+}
+
+interface EventListTableProps {
+  events: EventRecord[];
+  visibleColumns: EventColumnKey[];
+  selectedEventId: string | null;
+  density: EventDensity;
+  sort: EventSortState;
+  formatObservedAt: (value: string) => string;
+  formatSourceName: (source: string) => string;
+  onSortChange: (column: EventColumnKey) => void;
+  openEventPage: (eventId: string) => void;
+  selectEvent: (eventId: string) => void;
+}
+
+function renderEventTableCell(
+  event: EventRecord,
+  column: EventColumnKey,
+  formatObservedAtValue: (value: string) => string,
+  formatSourceNameValue: (source: string) => string,
+): ReactNode {
+  const actorLabel = event.principal.display_name || "Unknown actor";
+  const actorEmail = event.principal.email || "No email";
+  const sourceLabel = formatSourceNameValue(event.source);
+  const sensitivityLabel = formatTokenLabel(event.resource.sensitivity);
+  const actionTypeLabel = formatTokenLabel(event.action.category);
+
+  if (column === "observedAt") {
+    return (
+      <div>
+        <div className="event-table__primary">
+          {formatObservedAtValue(event.observed_at)}
+        </div>
+      </div>
+    );
+  }
+  if (column === "actor") {
+    return (
+      <div>
+        <div
+          className="event-table__primary event-table__truncate"
+          title={actorLabel}
+        >
+          {actorLabel}
+        </div>
+        {event.principal.email ? (
+          <div
+            className="event-table__secondary event-table__truncate"
+            title={actorEmail}
+          >
+            {actorEmail}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  if (column === "actorEmail") {
+    return (
+      <span
+        className="event-table__secondary event-table__truncate"
+        title={actorEmail}
+      >
+        {actorEmail}
+      </span>
+    );
+  }
+  if (column === "action") {
+    return (
+      <span
+        className="event-table__primary event-table__truncate"
+        title={event.action.verb}
+      >
+        {event.action.verb}
+      </span>
+    );
+  }
+  if (column === "resource") {
+    return (
+      <span
+        className="event-table__primary event-table__truncate"
+        title={event.resource.name}
+      >
+        {event.resource.name}
+      </span>
+    );
+  }
+  if (column === "source") {
+    return (
+      <span
+        className="event-table__pill event-table__pill--neutral"
+        title={sourceLabel}
+      >
+        {sourceLabel}
+      </span>
+    );
+  }
+  if (column === "sensitivity") {
+    return (
+      <span
+        className={`event-table__pill event-table__pill--${sensitivityTone(
+          event.resource.sensitivity,
+        )}`}
+        title={sensitivityLabel}
+      >
+        {sensitivityLabel}
+      </span>
+    );
+  }
+  if (column === "actionType") {
+    return (
+      <span
+        className="event-table__pill event-table__pill--neutral"
+        title={actionTypeLabel}
+      >
+        {actionTypeLabel}
+      </span>
+    );
+  }
+  if (column === "eventId") {
+    return (
+      <span
+        className="event-table__code event-table__truncate"
+        title={event.event_id}
+      >
+        {event.event_id}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="event-table__code event-table__truncate"
+      title={event.source_event_id}
+    >
+      {event.source_event_id}
+    </span>
+  );
+}
+
+function EventListTable({
+  events,
+  visibleColumns,
+  selectedEventId,
+  density,
+  sort,
+  formatObservedAt,
+  formatSourceName,
+  onSortChange,
+  openEventPage,
+  selectEvent,
+}: EventListTableProps) {
+  return (
+    <div
+      className={
+        density === "compact"
+          ? "event-table-shell event-table-shell--compact event-list--table"
+          : "event-table-shell event-list--table"
+      }
+    >
+      <table className="event-table">
+        <thead>
+          <tr>
+            {visibleColumns.map((column) => (
+              <th key={column} scope="col">
+                <button
+                  className={
+                    sort.column === column
+                      ? "event-table__sort event-table__sort--active"
+                      : "event-table__sort"
+                  }
+                  onClick={() => onSortChange(column)}
+                  type="button"
+                >
+                  <span>{eventColumnLabel(column)}</span>
+                  <span
+                    aria-hidden="true"
+                    className="event-table__sort-indicator"
+                  >
+                    {sort.column === column
+                      ? sort.direction === "asc"
+                        ? "↑"
+                        : "↓"
+                      : "↕"}
+                  </span>
+                </button>
+              </th>
+            ))}
+            <th className="event-table__actions-header" scope="col">
+              Open
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((event) => {
+            const selected = selectedEventId === event.event_id;
+            return (
+              <tr
+                aria-selected={selected}
+                className={
+                  selected
+                    ? "event-table__row event-table__row--selected"
+                    : "event-table__row"
+                }
+                key={event.event_id}
+                onClick={() => selectEvent(event.event_id)}
+                onKeyDown={(keyboardEvent) => {
+                  if (
+                    keyboardEvent.key === "Enter" ||
+                    keyboardEvent.key === " "
+                  ) {
+                    keyboardEvent.preventDefault();
+                    selectEvent(event.event_id);
+                  }
+                }}
+                tabIndex={0}
+              >
+                {visibleColumns.map((column) => (
+                  <td key={column}>
+                    {renderEventTableCell(
+                      event,
+                      column,
+                      formatObservedAt,
+                      formatSourceName,
+                    )}
+                  </td>
+                ))}
+                <td className="event-table__actions-cell">
+                  <a
+                    aria-label={`Open event ${event.event_id} in full page`}
+                    className="list-row-action list-row-action--icon"
+                    href={routeToHref({
+                      kind: "event",
+                      eventId: event.event_id,
+                    })}
+                    onClick={(clickEvent) => {
+                      clickEvent.preventDefault();
+                      clickEvent.stopPropagation();
+                      openEventPage(event.event_id);
+                    }}
+                    title="Open full page"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      className="list-row-action__icon"
+                      viewBox="0 0 16 16"
+                    >
+                      <path
+                        d="M6 3h7v7"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="1.5"
+                      />
+                      <path
+                        d="M13 3L7 9"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="1.5"
+                      />
+                      <path
+                        d="M11 8v4H3V4h4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="1.5"
+                      />
+                    </svg>
+                    <span className="visually-hidden">Open full page</span>
+                  </a>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+interface EventListCardsProps {
+  events: EventRecord[];
+  selectedEventId: string | null;
+  formatObservedAt: (value: string) => string;
+  formatSourceName: (source: string) => string;
+  openEventPage: (eventId: string) => void;
+  selectEvent: (eventId: string) => void;
+}
+
+function EventListCards({
+  events,
+  selectedEventId,
+  formatObservedAt,
+  formatSourceName,
+  openEventPage,
+  selectEvent,
+}: EventListCardsProps) {
+  return (
+    <div className="event-feed event-list--cards">
+      {events.map((event) => (
+        <article
+          className={
+            selectedEventId === event.event_id
+              ? "event-row event-row--interactive event-row--selected"
+              : "event-row event-row--interactive"
+          }
+          key={event.event_id}
+        >
+          <button
+            className="event-row__surface"
+            onClick={() => selectEvent(event.event_id)}
+            type="button"
+          >
+            <div className="event-row__time">
+              {formatObservedAt(event.observed_at)}
+            </div>
+            <div className="event-row__body">
+              <div className="event-row__title">
+                <strong>{event.principal.display_name}</strong>{" "}
+                {event.action.verb} <strong>{event.resource.name}</strong>
+              </div>
+              <div className="event-row__meta">
+                <span>{formatSourceName(event.source)}</span>
+                <span>{event.resource.sensitivity}</span>
+                <span>{event.action.category}</span>
+              </div>
+            </div>
+          </button>
+          <div className="list-row-actions">
+            <a
+              aria-label={`Open event ${event.event_id} in full page`}
+              className="list-row-action list-row-action--icon"
+              href={routeToHref({
+                kind: "event",
+                eventId: event.event_id,
+              })}
+              onClick={(clickEvent) => {
+                clickEvent.preventDefault();
+                openEventPage(event.event_id);
+              }}
+              title="Open full page"
+            >
+              <svg
+                aria-hidden="true"
+                className="list-row-action__icon"
+                viewBox="0 0 16 16"
+              >
+                <path
+                  d="M6 3h7v7"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.5"
+                />
+                <path
+                  d="M13 3L7 9"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.5"
+                />
+                <path
+                  d="M11 8v4H3V4h4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.5"
+                />
+              </svg>
+              <span className="visually-hidden">Open full page</span>
+            </a>
+          </div>
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -756,8 +1537,10 @@ function Pager({ page, label, onPrevious, onNext }: PagerProps) {
 }
 
 function DetailPane({
+  acknowledgingDetectionId,
   selectedItem,
   detailBusy,
+  onAcknowledgeDetection,
   openEventPage,
 }: DetailPaneProps) {
   const titleHref = selectedItem
@@ -783,12 +1566,15 @@ function DetailPane({
         <EmptyState title="Nothing selected yet." body="Select a record." />
       ) : selectedItem.type === "detection" ? (
         <DetectionDetailContent
+          acknowledging={acknowledgingDetectionId === selectedItem.id}
           badgeToneForSeverity={badgeToneForSeverity}
           detail={selectedItem.data}
           formatNumber={formatNumber}
           formatObservedAt={formatObservedAt}
           formatSourceName={formatSourceName}
+          onAcknowledge={() => onAcknowledgeDetection(selectedItem.id)}
           openEventPage={openEventPage}
+          stackSummaryCards
         />
       ) : (
         <EventDetailContent
@@ -927,6 +1713,20 @@ export function App() {
   const [detectionSearch, setDetectionSearch] = useState("");
   const [eventSearch, setEventSearch] = useState("");
   const [integrationSearch, setIntegrationSearch] = useState("");
+  const [eventVisibleColumns, setEventVisibleColumns] = useState<
+    EventColumnKey[]
+  >(readStoredEventColumns);
+  const [eventDensity, setEventDensity] = useState<EventDensity>(
+    readStoredEventDensity,
+  );
+  const [eventSort, setEventSort] =
+    useState<EventSortState>(readStoredEventSort);
+  const [detectionDensity, setDetectionDensity] = useState<EventDensity>(() =>
+    readStoredDensity(detectionListDensityStorageKey),
+  );
+  const [integrationDensity, setIntegrationDensity] = useState<EventDensity>(
+    () => readStoredDensity(integrationListDensityStorageKey),
+  );
   const [navPaneWidth, setNavPaneWidth] = useState(readStoredNavPaneWidth);
   const [navPaneCollapsed, setNavPaneCollapsed] = useState(
     readStoredNavPaneCollapsed,
@@ -938,6 +1738,9 @@ export function App() {
   const [detailBusy, setDetailBusy] = useState(
     initialRoute.kind === "detection" || initialRoute.kind === "event",
   );
+  const [acknowledgingDetectionId, setAcknowledgingDetectionId] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState("");
   const page = pageForRoute(route);
 
@@ -1029,6 +1832,38 @@ export function App() {
     );
   }, [navPaneCollapsed]);
 
+  useEffect(() => {
+    window.localStorage.setItem(
+      eventListColumnsStorageKey,
+      JSON.stringify(eventVisibleColumns),
+    );
+  }, [eventVisibleColumns]);
+
+  useEffect(() => {
+    window.localStorage.setItem(eventListDensityStorageKey, eventDensity);
+  }, [eventDensity]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      eventListSortStorageKey,
+      JSON.stringify(eventSort),
+    );
+  }, [eventSort]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      detectionListDensityStorageKey,
+      detectionDensity,
+    );
+  }, [detectionDensity]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      integrationListDensityStorageKey,
+      integrationDensity,
+    );
+  }, [integrationDensity]);
+
   const deferredDetectionSearch = useDeferredValue(detectionSearch.trim());
   const filteredDetections = detections.items.filter((detection) => {
     if (deferredDetectionSearch.length === 0) {
@@ -1056,6 +1891,9 @@ export function App() {
       formatSourceName(event.source).toLowerCase().includes(query)
     );
   });
+  const sortedFilteredEvents = [...filteredEvents].sort((left, right) =>
+    compareEvents(left, right, eventSort),
+  );
 
   const integrationEntries = sortIntegrationEntries(
     sourceCapability?.sources ?? {},
@@ -1172,6 +2010,26 @@ export function App() {
     }
   }
 
+  async function acknowledgeDetection(detectionId: string) {
+    setAcknowledgingDetectionId(detectionId);
+    try {
+      await fetchJson<Detection>(`/api/detections/${detectionId}/acknowledge`, {
+        method: "POST",
+      });
+      await refreshDashboard();
+      if (route.kind === "detection" && route.detectionId === detectionId) {
+        await selectDetection(detectionId);
+      } else {
+        setSelectedItem(null);
+      }
+      setError("");
+    } catch (acknowledgeError) {
+      setError(getErrorMessage(acknowledgeError));
+    } finally {
+      setAcknowledgingDetectionId(null);
+    }
+  }
+
   const selectedIntegrationEntry =
     filteredIntegrationEntries.find(
       (entry) => entry.source === selectedIntegrationSource,
@@ -1184,7 +2042,9 @@ export function App() {
   const counts = {
     events: null,
     detections: overview?.stream_state.detection_count ?? 0,
-    integrations: integrationEntries.length,
+    integrations: integrationEntries.filter(
+      (entry) => integrationStatus(entry.details).tone !== "positive",
+    ).length,
   };
   const currentPageTitle =
     route.kind === "detection"
@@ -1253,11 +2113,20 @@ export function App() {
                   />
                 ) : selectedDetection ? (
                   <DetectionDetailContent
+                    acknowledging={
+                      acknowledgingDetectionId ===
+                      selectedDetection.detection.detection_id
+                    }
                     badgeToneForSeverity={badgeToneForSeverity}
                     detail={selectedDetection}
                     formatNumber={formatNumber}
                     formatObservedAt={formatObservedAt}
                     formatSourceName={formatSourceName}
+                    onAcknowledge={() =>
+                      void acknowledgeDetection(
+                        selectedDetection.detection.detection_id,
+                      )
+                    }
                     openEventPage={openEventPage}
                   />
                 ) : (
@@ -1348,6 +2217,12 @@ export function App() {
                     resultCount={filteredDetections.length}
                     searchPlaceholder="Search detections"
                     searchValue={detectionSearch}
+                    toolbarActions={
+                      <EventDensityToggle
+                        density={detectionDensity}
+                        onChange={setDetectionDensity}
+                      />
+                    }
                     tone="priority"
                   >
                     <div className="list-stack">
@@ -1356,8 +2231,12 @@ export function App() {
                           className={
                             selectedItem?.type === "detection" &&
                             selectedItem.id === detection.detection_id
-                              ? "record-card record-card--interactive record-card--selected"
-                              : "record-card record-card--interactive"
+                              ? detectionDensity === "compact"
+                                ? "record-card record-card--interactive record-card--selected record-card--compact"
+                                : "record-card record-card--interactive record-card--selected"
+                              : detectionDensity === "compact"
+                                ? "record-card record-card--interactive record-card--compact"
+                                : "record-card record-card--interactive"
                           }
                           key={detection.detection_id}
                         >
@@ -1381,17 +2260,32 @@ export function App() {
                                 {detection.severity}
                               </span>
                             </div>
-                            <div className="record-card__meta">
-                              <span>Score {detection.score.toFixed(2)}</span>
-                              <span>
-                                Confidence {detection.confidence.toFixed(2)}
-                              </span>
-                              <span>
-                                {formatNumber(detection.evidence.length)}{" "}
-                                evidence
-                              </span>
+                            <div className="record-card__summary">
+                              <div className="record-card__summary-item">
+                                <span>Score</span>
+                                <strong>{detection.score.toFixed(2)}</strong>
+                              </div>
+                              <div className="record-card__summary-item">
+                                <span>Confidence</span>
+                                <strong>
+                                  {detection.confidence.toFixed(2)}
+                                </strong>
+                              </div>
+                              <div className="record-card__summary-item">
+                                <span>Evidence</span>
+                                <strong>
+                                  {formatNumber(detection.evidence.length)}
+                                </strong>
+                              </div>
+                              <div className="record-card__summary-item">
+                                <span>Status</span>
+                                <strong>{detection.status}</strong>
+                              </div>
                             </div>
                             <div className="token-row">
+                              <span className="token token--muted">
+                                {detection.scenario}
+                              </span>
                               {detection.reasons.slice(0, 3).map((reason) => (
                                 <span className="token" key={reason}>
                                   {reason}
@@ -1456,7 +2350,11 @@ export function App() {
                 onResize={setSplitPaneWidth}
                 right={
                   <DetailPane
+                    acknowledgingDetectionId={acknowledgingDetectionId}
                     detailBusy={detailBusy}
+                    onAcknowledgeDetection={(detectionId) => {
+                      void acknowledgeDetection(detectionId);
+                    }}
                     openEventPage={openEventPage}
                     selectedItem={selectedItem}
                   />
@@ -1497,97 +2395,76 @@ export function App() {
                     resultCount={filteredEvents.length}
                     searchPlaceholder="Search events"
                     searchValue={eventSearch}
+                    toolbarActions={
+                      <>
+                        <EventDensityToggle
+                          density={eventDensity}
+                          onChange={setEventDensity}
+                        />
+                        <EventColumnsMenu
+                          onChange={(columns) => {
+                            setEventVisibleColumns(columns);
+                            if (!columns.includes(eventSort.column)) {
+                              setEventSort(defaultEventSort);
+                            }
+                          }}
+                          visibleColumns={eventVisibleColumns}
+                        />
+                      </>
+                    }
                   >
-                    <div className="event-feed">
-                      {filteredEvents.map((event) => (
-                        <article
-                          className={
-                            selectedItem?.type === "event" &&
-                            selectedItem.id === event.event_id
-                              ? "event-row event-row--interactive event-row--selected"
-                              : "event-row event-row--interactive"
+                    <EventListTable
+                      density={eventDensity}
+                      events={sortedFilteredEvents}
+                      formatObservedAt={formatObservedAt}
+                      formatSourceName={formatSourceName}
+                      onSortChange={(column) => {
+                        setEventSort((current) => {
+                          if (current.column === column) {
+                            return {
+                              column,
+                              direction:
+                                current.direction === "asc" ? "desc" : "asc",
+                            };
                           }
-                          key={event.event_id}
-                        >
-                          <button
-                            className="event-row__surface"
-                            onClick={() => selectEvent(event.event_id)}
-                            type="button"
-                          >
-                            <div className="event-row__time">
-                              {formatObservedAt(event.observed_at)}
-                            </div>
-                            <div className="event-row__body">
-                              <div className="event-row__title">
-                                <strong>{event.principal.display_name}</strong>{" "}
-                                {event.action.verb}{" "}
-                                <strong>{event.resource.name}</strong>
-                              </div>
-                              <div className="event-row__meta">
-                                <span>{formatSourceName(event.source)}</span>
-                                <span>{event.resource.sensitivity}</span>
-                                <span>{event.action.category}</span>
-                              </div>
-                            </div>
-                          </button>
-                          <div className="list-row-actions">
-                            <a
-                              aria-label={`Open event ${event.event_id} in full page`}
-                              className="list-row-action list-row-action--icon"
-                              href={routeToHref({
-                                kind: "event",
-                                eventId: event.event_id,
-                              })}
-                              onClick={(clickEvent) => {
-                                clickEvent.preventDefault();
-                                openEventPage(event.event_id);
-                              }}
-                              title="Open full page"
-                            >
-                              <svg
-                                aria-hidden="true"
-                                className="list-row-action__icon"
-                                viewBox="0 0 16 16"
-                              >
-                                <path
-                                  d="M6 3h7v7"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="1.5"
-                                />
-                                <path
-                                  d="M13 3L7 9"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="1.5"
-                                />
-                                <path
-                                  d="M11 8v4H3V4h4"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="1.5"
-                                />
-                              </svg>
-                              <span className="visually-hidden">
-                                Open full page
-                              </span>
-                            </a>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
+                          return {
+                            column,
+                            direction: defaultSortDirection(column),
+                          };
+                        });
+                      }}
+                      openEventPage={openEventPage}
+                      selectEvent={(eventId) => {
+                        void selectEvent(eventId);
+                      }}
+                      selectedEventId={
+                        selectedItem?.type === "event" ? selectedItem.id : null
+                      }
+                      sort={eventSort}
+                      visibleColumns={eventVisibleColumns}
+                    />
+                    <EventListCards
+                      events={sortedFilteredEvents}
+                      formatObservedAt={formatObservedAt}
+                      formatSourceName={formatSourceName}
+                      openEventPage={openEventPage}
+                      selectEvent={(eventId) => {
+                        void selectEvent(eventId);
+                      }}
+                      selectedEventId={
+                        selectedItem?.type === "event" ? selectedItem.id : null
+                      }
+                    />
                   </MasterListPane>
                 }
                 onResize={setSplitPaneWidth}
                 right={
                   <DetailPane
+                    acknowledgingDetectionId={acknowledgingDetectionId}
                     detailBusy={detailBusy}
+                    onAcknowledgeDetection={(detectionId) => {
+                      void acknowledgeDetection(detectionId);
+                    }}
                     openEventPage={openEventPage}
                     selectedItem={selectedItem}
                   />
@@ -1614,16 +2491,29 @@ export function App() {
                     resultCount={filteredIntegrationEntries.length}
                     searchPlaceholder="Search integrations"
                     searchValue={integrationSearch}
+                    toolbarActions={
+                      <EventDensityToggle
+                        density={integrationDensity}
+                        onChange={setIntegrationDensity}
+                      />
+                    }
                   >
                     <div className="integration-master-list">
                       {filteredIntegrationEntries.map((entry) => {
                         const status = integrationStatus(entry.details);
+                        const coverageCount = integrationCoverageCount(
+                          entry.details,
+                        );
                         return (
                           <article
                             className={
                               entry.source === selectedIntegrationSource
-                                ? "integration-list-item integration-list-item--interactive integration-list-item--selected"
-                                : "integration-list-item integration-list-item--interactive"
+                                ? integrationDensity === "compact"
+                                  ? "integration-list-item integration-list-item--interactive integration-list-item--selected integration-list-item--compact"
+                                  : "integration-list-item integration-list-item--interactive integration-list-item--selected"
+                                : integrationDensity === "compact"
+                                  ? "integration-list-item integration-list-item--interactive integration-list-item--compact"
+                                  : "integration-list-item integration-list-item--interactive"
                             }
                             key={entry.source}
                           >
@@ -1643,26 +2533,83 @@ export function App() {
                                   {status.label}
                                 </span>
                               </div>
+                              <div className="token-row">
+                                <span className="token token--muted">
+                                  {entry.source}
+                                </span>
+                                {entry.details.missing_required_event_types
+                                  .length > 0 ? (
+                                  <span className="token token--critical">
+                                    {formatNumber(
+                                      entry.details.missing_required_event_types
+                                        .length,
+                                    )}{" "}
+                                    missing types
+                                  </span>
+                                ) : null}
+                                {entry.details.missing_required_fields.length >
+                                0 ? (
+                                  <span className="token token--critical">
+                                    {formatNumber(
+                                      entry.details.missing_required_fields
+                                        .length,
+                                    )}{" "}
+                                    missing fields
+                                  </span>
+                                ) : null}
+                                {entry.details.dead_letter_7d_count > 0 ? (
+                                  <span className="token token--critical">
+                                    {formatNumber(
+                                      entry.details.dead_letter_7d_count,
+                                    )}{" "}
+                                    dead letters
+                                  </span>
+                                ) : null}
+                                {entry.details.dead_letter_7d_count === 0 &&
+                                entry.details.missing_required_event_types
+                                  .length === 0 &&
+                                entry.details.missing_required_fields.length ===
+                                  0 ? (
+                                  <span className="token token--positive">
+                                    No current contract issues
+                                  </span>
+                                ) : null}
+                              </div>
                               <p className="integration-list-item__note">
                                 {status.note}
                               </p>
-                              <div className="integration-list-item__stats">
-                                <span>
-                                  {formatNumber(entry.details.raw_24h_count)}{" "}
-                                  24h landed
-                                </span>
-                                <span>
-                                  {formatNumber(
-                                    entry.details.normalized_24h_count,
-                                  )}{" "}
-                                  24h normalized
-                                </span>
-                                <span>
-                                  {formatNumber(
-                                    entry.details.dead_letter_7d_count,
-                                  )}{" "}
-                                  7d dead letters
-                                </span>
+                              <div className="record-card__summary">
+                                <div className="record-card__summary-item">
+                                  <span>24h landed</span>
+                                  <strong>
+                                    {formatNumber(entry.details.raw_24h_count)}
+                                  </strong>
+                                </div>
+                                <div className="record-card__summary-item">
+                                  <span>24h normalized</span>
+                                  <strong>
+                                    {formatNumber(
+                                      entry.details.normalized_24h_count,
+                                    )}
+                                  </strong>
+                                </div>
+                                <div className="record-card__summary-item">
+                                  <span>7d dead letters</span>
+                                  <strong>
+                                    {formatNumber(
+                                      entry.details.dead_letter_7d_count,
+                                    )}
+                                  </strong>
+                                </div>
+                                <div className="record-card__summary-item">
+                                  <span>Field coverage</span>
+                                  <strong>
+                                    {formatNumber(coverageCount)}/
+                                    {formatNumber(
+                                      entry.details.required_fields.length,
+                                    )}
+                                  </strong>
+                                </div>
                               </div>
                             </button>
                             <div className="list-row-actions">

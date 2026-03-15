@@ -5,11 +5,20 @@ from typing import Any
 
 from seccloud.contracts import Case
 from seccloud.ids import new_prefixed_id
+from seccloud.projection_store import (
+    fetch_detection_linked_events,
+    fetch_hot_event_detail,
+    fetch_timeline_events,
+)
 from seccloud.storage import Workspace, parse_timestamp
 
 
 def list_detections(workspace: Workspace) -> list[dict[str, Any]]:
     return workspace.list_detections()
+
+
+def active_detection_count(workspace: Workspace) -> int:
+    return sum(1 for detection in workspace.list_detections() if detection.get("status", "open") == "open")
 
 
 def _find_case_for_detection(workspace: Workspace, detection_id: str) -> dict[str, Any] | None:
@@ -19,21 +28,29 @@ def _find_case_for_detection(workspace: Workspace, detection_id: str) -> dict[st
     return None
 
 
-def _detection_anchor_event(workspace: Workspace, detection: dict[str, Any]) -> dict[str, Any] | None:
+def _detection_anchor_event(
+    workspace: Workspace,
+    detection: dict[str, Any],
+    dsn: str | None = None,
+) -> dict[str, Any] | None:
     if not detection.get("event_ids"):
         return None
-    return get_event_detail(workspace, detection["event_ids"][0])
+    return get_event_detail(workspace, detection["event_ids"][0], dsn=dsn)
 
 
-def _case_anchor_event(workspace: Workspace, case: dict[str, Any]) -> dict[str, Any] | None:
+def _case_anchor_event(workspace: Workspace, case: dict[str, Any], dsn: str | None = None) -> dict[str, Any] | None:
     detection_ids = case.get("detection_ids", [])
     if not detection_ids:
         return None
-    return _detection_anchor_event(workspace, workspace.get_detection(detection_ids[0]))
+    return _detection_anchor_event(workspace, workspace.get_detection(detection_ids[0]), dsn=dsn)
 
 
-def _find_groupable_case(workspace: Workspace, detection: dict[str, Any]) -> dict[str, Any] | None:
-    anchor_event = _detection_anchor_event(workspace, detection)
+def _find_groupable_case(
+    workspace: Workspace,
+    detection: dict[str, Any],
+    dsn: str | None = None,
+) -> dict[str, Any] | None:
+    anchor_event = _detection_anchor_event(workspace, detection, dsn=dsn)
     if anchor_event is None:
         return None
     principal_id = anchor_event["principal"]["id"]
@@ -41,7 +58,7 @@ def _find_groupable_case(workspace: Workspace, detection: dict[str, Any]) -> dic
     for case in workspace.list_cases():
         if case.get("status") != "open":
             continue
-        case_anchor = _case_anchor_event(workspace, case)
+        case_anchor = _case_anchor_event(workspace, case, dsn=dsn)
         if case_anchor is None:
             continue
         if case_anchor["principal"]["id"] != principal_id:
@@ -63,21 +80,37 @@ def _persist_case_artifact(workspace: Workspace, case: dict[str, Any]) -> None:
     workspace.save_derived_state(derived_state)
 
 
+def _matches_entity_reference(entity: dict[str, Any], reference: str | None) -> bool:
+    if reference is None:
+        return True
+    return entity.get("id") == reference or entity.get("entity_id") == reference
+
+
 def get_entity_timeline(
     workspace: Workspace,
     principal_id: str | None = None,
     resource_id: str | None = None,
     limit: int = 25,
+    dsn: str | None = None,
 ) -> list[dict[str, Any]]:
+    if dsn is not None and (principal_id is not None or resource_id is not None):
+        return fetch_timeline_events(
+            tenant_id=workspace.tenant_id,
+            principal_reference=principal_id,
+            resource_reference=resource_id,
+            limit=limit,
+            dsn=dsn,
+        )
     events = workspace.list_normalized_events()
     selected = []
     for event in events:
-        if principal_id and event["principal"]["id"] != principal_id:
+        if not _matches_entity_reference(event["principal"], principal_id):
             continue
-        if resource_id and event["resource"]["id"] != resource_id:
+        if not _matches_entity_reference(event["resource"], resource_id):
             continue
         selected.append(event)
-    return selected[-limit:]
+    selected.sort(key=lambda item: (item["observed_at"], item["event_id"]), reverse=True)
+    return selected[:limit]
 
 
 def build_evidence_bundle(workspace: Workspace, detection_id: str) -> dict[str, Any]:
@@ -97,17 +130,22 @@ def build_evidence_bundle(workspace: Workspace, detection_id: str) -> dict[str, 
     }
 
 
-def get_event_detail(workspace: Workspace, event_id: str) -> dict[str, Any] | None:
+def get_event_detail(workspace: Workspace, event_id: str, dsn: str | None = None) -> dict[str, Any] | None:
+    if dsn is not None:
+        indexed = fetch_hot_event_detail(tenant_id=workspace.tenant_id, event_id=event_id, dsn=dsn)
+        if indexed is not None:
+            return indexed["event_payload"]
     for event in workspace.list_normalized_events():
         if event["event_id"] == event_id:
             return event
     return None
 
 
-def build_peer_comparison(workspace: Workspace, detection_id: str) -> dict[str, Any]:
+def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
     detection = workspace.get_detection(detection_id)
-    normalized_events = {item["event_id"]: item for item in workspace.list_normalized_events()}
-    anchor_event = normalized_events[detection["event_ids"][0]]
+    anchor_event = get_event_detail(workspace, detection["event_ids"][0], dsn=dsn)
+    if anchor_event is None:
+        raise KeyError(f"Anchor event not found for detection {detection_id}")
     derived_state = workspace.load_derived_state()
     peer_group = anchor_event["principal"]["department"]
     peer_state = derived_state.get("peer_groups", {}).get(peer_group, {})
@@ -126,15 +164,33 @@ def build_peer_comparison(workspace: Workspace, detection_id: str) -> dict[str, 
     }
 
 
-def get_detection_detail(workspace: Workspace, detection_id: str) -> dict[str, Any]:
+def get_detection_detail(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
     detection = workspace.get_detection(detection_id)
-    event_details = [get_event_detail(workspace, event_id) for event_id in detection["event_ids"]]
+    if dsn is not None:
+        event_details = fetch_detection_linked_events(
+            tenant_id=workspace.tenant_id,
+            detection_id=detection_id,
+            dsn=dsn,
+        )
+        if not event_details and detection.get("event_ids"):
+            event_details = [get_event_detail(workspace, event_id) for event_id in detection["event_ids"]]
+    else:
+        event_details = [get_event_detail(workspace, event_id) for event_id in detection["event_ids"]]
     return {
         "detection": detection,
-        "peer_comparison": build_peer_comparison(workspace, detection_id),
+        "peer_comparison": build_peer_comparison(workspace, detection_id, dsn=dsn),
         "evidence_bundle": build_evidence_bundle(workspace, detection_id),
         "events": [event for event in event_details if event is not None],
     }
+
+
+def acknowledge_detection(workspace: Workspace, detection_id: str) -> dict[str, Any]:
+    detection = workspace.get_detection(detection_id)
+    if detection is None:
+        raise KeyError(f"Detection not found: {detection_id}")
+    detection["status"] = "acknowledged"
+    workspace.save_detection(detection)
+    return detection
 
 
 def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[str, Any]:

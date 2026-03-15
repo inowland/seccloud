@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,11 +10,13 @@ from psycopg.rows import dict_row
 
 from seccloud.pipeline import sanitize_ops_metadata
 from seccloud.runtime_stream import get_runtime_stream_state
-from seccloud.storage import Workspace
+from seccloud.storage import NORMALIZED_SCHEMA_VERSION, Workspace
 
 PROJECTED_EVENTS_TABLE = "projected_events"
 PROJECTED_DETECTIONS_TABLE = "projected_detections"
 PROJECTION_STATE_TABLE = "projection_state"
+HOT_EVENT_INDEX_TABLE = "hot_event_index"
+DETECTION_EVENT_EDGE_TABLE = "detection_event_edge"
 
 DEFAULT_PROJECTION_PGPORT = 55432
 DEFAULT_PROJECTION_PGDATABASE = "seccloud"
@@ -29,6 +32,10 @@ def default_projection_dsn() -> str:
     )
 
 
+def _now_timestamp() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def ensure_projection_schema(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -39,6 +46,7 @@ def ensure_projection_schema(conn: psycopg.Connection) -> None:
               payload jsonb not null
             );
             create table if not exists {PROJECTED_DETECTIONS_TABLE} (
+              tenant_id text not null,
               detection_id text primary key,
               observed_at timestamptz not null,
               payload jsonb not null
@@ -47,6 +55,73 @@ def ensure_projection_schema(conn: psycopg.Connection) -> None:
               key text primary key,
               payload jsonb not null
             );
+            create table if not exists {HOT_EVENT_INDEX_TABLE} (
+              tenant_id text not null,
+              event_id text primary key,
+              event_key text not null,
+              normalized_schema_version text not null,
+              source text not null,
+              integration_id text null,
+              source_event_id text not null,
+              observed_at timestamptz not null,
+              principal_entity_id text not null,
+              principal_id text not null,
+              principal_display_name text not null,
+              principal_email text not null,
+              principal_department text not null,
+              resource_entity_id text not null,
+              resource_id text not null,
+              resource_name text not null,
+              resource_kind text not null,
+              resource_sensitivity text not null,
+              action_verb text not null,
+              action_category text not null,
+              environment jsonb not null,
+              attributes jsonb not null,
+              event_payload jsonb not null,
+              normalized_pointer jsonb not null,
+              raw_pointer jsonb null,
+              raw_retention_state text not null,
+              indexed_at timestamptz not null,
+              updated_at timestamptz not null
+            );
+            create table if not exists {DETECTION_EVENT_EDGE_TABLE} (
+              tenant_id text not null,
+              detection_id text not null,
+              event_id text not null references {HOT_EVENT_INDEX_TABLE}(event_id),
+              ordinal integer not null,
+              link_role text not null,
+              observed_at timestamptz not null,
+              created_at timestamptz not null,
+              primary key (tenant_id, detection_id, event_id)
+            );
+            create unique index if not exists hot_event_index_tenant_event_key_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, event_key);
+            create index if not exists hot_event_index_tenant_observed_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, observed_at desc, event_id desc);
+            create index if not exists hot_event_index_tenant_source_observed_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, source, observed_at desc, event_id desc);
+            create index if not exists hot_event_index_tenant_integration_observed_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, integration_id, observed_at desc, event_id desc);
+            create index if not exists hot_event_index_tenant_principal_entity_observed_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, principal_entity_id, observed_at desc, event_id desc);
+            create index if not exists hot_event_index_tenant_resource_entity_observed_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, resource_entity_id, observed_at desc, event_id desc);
+            create index if not exists hot_event_index_tenant_action_category_observed_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, action_category, observed_at desc, event_id desc);
+            create index if not exists hot_event_index_tenant_action_verb_observed_idx
+              on {HOT_EVENT_INDEX_TABLE} (tenant_id, action_verb, observed_at desc, event_id desc);
+            create unique index if not exists detection_event_edge_tenant_detection_ordinal_idx
+              on {DETECTION_EVENT_EDGE_TABLE} (tenant_id, detection_id, ordinal);
+            create index if not exists detection_event_edge_tenant_event_idx
+              on {DETECTION_EVENT_EDGE_TABLE} (tenant_id, event_id, observed_at desc, detection_id desc);
+            alter table {PROJECTED_DETECTIONS_TABLE}
+              add column if not exists tenant_id text;
+            update {PROJECTED_DETECTIONS_TABLE}
+              set tenant_id = coalesce(tenant_id, payload->>'tenant_id')
+              where tenant_id is null;
+            create index if not exists projected_detections_tenant_observed_idx
+              on {PROJECTED_DETECTIONS_TABLE} (tenant_id, observed_at desc, detection_id desc);
             """
         )
     conn.commit()
@@ -57,6 +132,8 @@ def reset_projection_schema(conn: psycopg.Connection) -> None:
         cur.execute(
             f"""
             drop table if exists projected_cases;
+            drop table if exists {DETECTION_EVENT_EDGE_TABLE};
+            drop table if exists {HOT_EVENT_INDEX_TABLE};
             drop table if exists {PROJECTION_STATE_TABLE};
             drop table if exists {PROJECTED_DETECTIONS_TABLE};
             drop table if exists {PROJECTED_EVENTS_TABLE};
@@ -66,13 +143,219 @@ def reset_projection_schema(conn: psycopg.Connection) -> None:
     conn.commit()
 
 
+def _delete_rows_by_ids(
+    cur: psycopg.Cursor,
+    *,
+    table: str,
+    id_column: str,
+    ids: list[str],
+) -> None:
+    if not ids:
+        return
+    cur.execute(f"delete from {table} where {id_column} = any(%s)", (ids,))
+
+
+def _delete_tenant_rows_by_ids(
+    cur: psycopg.Cursor,
+    *,
+    table: str,
+    tenant_id: str,
+    id_column: str,
+    ids: list[str],
+) -> None:
+    if not ids:
+        return
+    cur.execute(f"delete from {table} where tenant_id = %s and {id_column} = any(%s)", (tenant_id, ids))
+
+
+def _select_stale_tenant_ids(
+    cur: psycopg.Cursor,
+    *,
+    table: str,
+    tenant_id: str,
+    id_column: str,
+    current_ids: list[str],
+) -> list[str]:
+    if current_ids:
+        cur.execute(
+            f"""
+            select distinct {id_column} as id
+            from {table}
+            where tenant_id = %s and not ({id_column} = any(%s))
+            """,
+            (tenant_id, current_ids),
+        )
+    else:
+        cur.execute(
+            f"""
+            select distinct {id_column} as id
+            from {table}
+            where tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+    return [row["id"] for row in cur.fetchall()]
+
+
+def _normalized_pointer_for_event(workspace: Workspace, event: dict[str, Any]) -> dict[str, Any]:
+    manifest = workspace.ensure_normalized_lake_artifacts(event)
+    obj = manifest["objects"][0]
+    return {
+        "pointer_version": 1,
+        "object_key": obj["object_key"],
+        "object_format": obj["object_format"],
+        "sha256": obj["sha256"],
+        "manifest_key": workspace._normalized_lake_manifest_key(event),  # noqa: SLF001
+        "record_locator": {
+            "ordinal": 0,
+            "row_group": 0,
+        },
+        "retention_class": "normalized_retained",
+    }
+
+
+def _raw_pointer_for_event(workspace: Workspace, event: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    attributes = event.get("attributes", {})
+    manifest_key = attributes.get("raw_manifest_key")
+    object_key = attributes.get("raw_batch_object_key")
+    ordinal = attributes.get("raw_record_ordinal")
+    object_sha256 = attributes.get("raw_object_sha256")
+    object_format = attributes.get("raw_object_format")
+    if not isinstance(manifest_key, str) or not isinstance(object_key, str):
+        return None, "unknown"
+    manifest = workspace.object_store.get_json(manifest_key)
+    descriptor = None
+    if manifest is not None:
+        descriptor = next(
+            (item for item in manifest.get("objects", []) if item.get("object_key") == object_key),
+            None,
+        )
+    if descriptor is not None:
+        object_sha256 = descriptor["sha256"]
+        object_format = descriptor["object_format"]
+    if not isinstance(object_sha256, str) or not isinstance(object_format, str):
+        return None, "unknown"
+    pointer: dict[str, Any] = {
+        "pointer_version": 1,
+        "object_key": object_key,
+        "object_format": object_format,
+        "sha256": object_sha256,
+        "manifest_key": manifest_key,
+        "retention_class": "raw_hot",
+    }
+    if isinstance(ordinal, int):
+        pointer["record_locator"] = {"ordinal": ordinal}
+    raw_available = workspace.object_store.get_bytes(object_key) is not None
+    return pointer, ("available" if raw_available else "expired")
+
+
+def _hot_event_index_row(workspace: Workspace, event: dict[str, Any]) -> dict[str, Any]:
+    indexed_at = _now_timestamp()
+    normalized_pointer = _normalized_pointer_for_event(workspace, event)
+    raw_pointer, raw_retention_state = _raw_pointer_for_event(workspace, event)
+    return {
+        "tenant_id": workspace.tenant_id,
+        "event_id": event["event_id"],
+        "event_key": event["event_key"],
+        "normalized_schema_version": NORMALIZED_SCHEMA_VERSION,
+        "source": event["source"],
+        "integration_id": event.get("integration_id"),
+        "source_event_id": event["source_event_id"],
+        "observed_at": event["observed_at"],
+        "principal_entity_id": event["principal"]["entity_id"],
+        "principal_id": event["principal"]["id"],
+        "principal_display_name": event["principal"]["display_name"],
+        "principal_email": event["principal"]["email"],
+        "principal_department": event["principal"]["department"],
+        "resource_entity_id": event["resource"]["entity_id"],
+        "resource_id": event["resource"]["id"],
+        "resource_name": event["resource"]["name"],
+        "resource_kind": event["resource"]["kind"],
+        "resource_sensitivity": event["resource"]["sensitivity"],
+        "action_verb": event["action"]["verb"],
+        "action_category": event["action"]["category"],
+        "environment": event.get("environment", {}),
+        "attributes": event.get("attributes", {}),
+        "event_payload": event,
+        "normalized_pointer": normalized_pointer,
+        "raw_pointer": raw_pointer,
+        "raw_retention_state": raw_retention_state,
+        "indexed_at": indexed_at,
+        "updated_at": indexed_at,
+    }
+
+
 def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
     dsn = dsn or default_projection_dsn()
+    normalized_events = workspace.list_normalized_events()
+    detections = workspace.list_detections()
+    event_lookup = {event["event_id"]: event for event in normalized_events}
+    indexed_rows = [_hot_event_index_row(workspace, event) for event in normalized_events]
+    event_ids = sorted(event_lookup)
+    detection_ids = sorted(detection["detection_id"] for detection in detections)
+
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         ensure_projection_schema(conn)
-        reset_projection_schema(conn)
         with conn.cursor() as cur:
-            for event in workspace.list_normalized_events():
+            for row in indexed_rows:
+                cur.execute(
+                    f"""
+                    insert into {HOT_EVENT_INDEX_TABLE} (
+                      tenant_id, event_id, event_key, normalized_schema_version, source, integration_id,
+                      source_event_id, observed_at, principal_entity_id, principal_id,
+                      principal_display_name, principal_email, principal_department,
+                      resource_entity_id, resource_id, resource_name, resource_kind,
+                      resource_sensitivity, action_verb, action_category, environment,
+                      attributes, event_payload, normalized_pointer, raw_pointer,
+                      raw_retention_state, indexed_at, updated_at
+                    ) values (
+                      %(tenant_id)s, %(event_id)s, %(event_key)s, %(normalized_schema_version)s,
+                      %(source)s, %(integration_id)s,
+                      %(source_event_id)s, %(observed_at)s, %(principal_entity_id)s, %(principal_id)s,
+                      %(principal_display_name)s, %(principal_email)s, %(principal_department)s,
+                      %(resource_entity_id)s, %(resource_id)s, %(resource_name)s, %(resource_kind)s,
+                      %(resource_sensitivity)s, %(action_verb)s, %(action_category)s, %(environment)s::jsonb,
+                      %(attributes)s::jsonb, %(event_payload)s::jsonb,
+                      %(normalized_pointer)s::jsonb, %(raw_pointer)s::jsonb,
+                      %(raw_retention_state)s, %(indexed_at)s, %(updated_at)s
+                    )
+                    on conflict (event_id) do update set
+                      tenant_id = excluded.tenant_id,
+                      event_key = excluded.event_key,
+                      normalized_schema_version = excluded.normalized_schema_version,
+                      source = excluded.source,
+                      integration_id = excluded.integration_id,
+                      source_event_id = excluded.source_event_id,
+                      observed_at = excluded.observed_at,
+                      principal_entity_id = excluded.principal_entity_id,
+                      principal_id = excluded.principal_id,
+                      principal_display_name = excluded.principal_display_name,
+                      principal_email = excluded.principal_email,
+                      principal_department = excluded.principal_department,
+                      resource_entity_id = excluded.resource_entity_id,
+                      resource_id = excluded.resource_id,
+                      resource_name = excluded.resource_name,
+                      resource_kind = excluded.resource_kind,
+                      resource_sensitivity = excluded.resource_sensitivity,
+                      action_verb = excluded.action_verb,
+                      action_category = excluded.action_category,
+                      environment = excluded.environment,
+                      attributes = excluded.attributes,
+                      event_payload = excluded.event_payload,
+                      normalized_pointer = excluded.normalized_pointer,
+                      raw_pointer = excluded.raw_pointer,
+                      raw_retention_state = excluded.raw_retention_state,
+                      updated_at = excluded.updated_at
+                    """,
+                    {
+                        **row,
+                        "environment": json.dumps(row["environment"]),
+                        "attributes": json.dumps(row["attributes"]),
+                        "event_payload": json.dumps(row["event_payload"]),
+                        "normalized_pointer": json.dumps(row["normalized_pointer"]),
+                        "raw_pointer": json.dumps(row["raw_pointer"]) if row["raw_pointer"] is not None else None,
+                    },
+                )
                 cur.execute(
                     f"""
                     insert into {PROJECTED_EVENTS_TABLE} (
@@ -80,44 +363,126 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                     ) values (
                       %(event_id)s, %(observed_at)s, %(payload)s::jsonb
                     )
+                    on conflict (event_id) do update set
+                      observed_at = excluded.observed_at,
+                      payload = excluded.payload
                     """,
                     {
-                        "event_id": event["event_id"],
-                        "observed_at": event["observed_at"],
-                        "payload": json.dumps(event),
+                        "event_id": row["event_id"],
+                        "observed_at": row["observed_at"],
+                        "payload": json.dumps(row["event_payload"]),
                     },
                 )
-            event_lookup = {event["event_id"]: event for event in workspace.list_normalized_events()}
-            for detection in workspace.list_detections():
+            stale_event_ids = _select_stale_tenant_ids(
+                cur,
+                table=HOT_EVENT_INDEX_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="event_id",
+                current_ids=event_ids,
+            )
+            _delete_rows_by_ids(cur, table=PROJECTED_EVENTS_TABLE, id_column="event_id", ids=stale_event_ids)
+            _delete_tenant_rows_by_ids(
+                cur,
+                table=DETECTION_EVENT_EDGE_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="event_id",
+                ids=stale_event_ids,
+            )
+            _delete_tenant_rows_by_ids(
+                cur,
+                table=HOT_EVENT_INDEX_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="event_id",
+                ids=stale_event_ids,
+            )
+            for detection in detections:
                 anchor_event = event_lookup[detection["event_ids"][0]]
                 cur.execute(
                     f"""
                     insert into {PROJECTED_DETECTIONS_TABLE} (
-                      detection_id, observed_at, payload
+                      tenant_id, detection_id, observed_at, payload
                     ) values (
-                      %(detection_id)s, %(observed_at)s, %(payload)s::jsonb
+                      %(tenant_id)s, %(detection_id)s, %(observed_at)s, %(payload)s::jsonb
                     )
+                    on conflict (detection_id) do update set
+                      tenant_id = excluded.tenant_id,
+                      observed_at = excluded.observed_at,
+                      payload = excluded.payload
                     """,
                     {
+                        "tenant_id": workspace.tenant_id,
                         "detection_id": detection["detection_id"],
                         "observed_at": anchor_event["observed_at"],
                         "payload": json.dumps(detection),
                     },
                 )
+                cur.execute(
+                    f"""
+                    delete from {DETECTION_EVENT_EDGE_TABLE}
+                    where tenant_id = %s and detection_id = %s
+                    """,
+                    (workspace.tenant_id, detection["detection_id"]),
+                )
+                for ordinal, event_id in enumerate(detection["event_ids"]):
+                    linked_event = event_lookup[event_id]
+                    cur.execute(
+                        f"""
+                        insert into {DETECTION_EVENT_EDGE_TABLE} (
+                          tenant_id, detection_id, event_id, ordinal, link_role, observed_at, created_at
+                        ) values (
+                          %(tenant_id)s, %(detection_id)s, %(event_id)s, %(ordinal)s,
+                          %(link_role)s, %(observed_at)s, %(created_at)s
+                        )
+                        """,
+                        {
+                            "tenant_id": workspace.tenant_id,
+                            "detection_id": detection["detection_id"],
+                            "event_id": event_id,
+                            "ordinal": ordinal,
+                            "link_role": "anchor" if ordinal == 0 else "supporting",
+                            "observed_at": linked_event["observed_at"],
+                            "created_at": _now_timestamp(),
+                        },
+                    )
+            stale_detection_ids = _select_stale_tenant_ids(
+                cur,
+                table=PROJECTED_DETECTIONS_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="detection_id",
+                current_ids=detection_ids,
+            )
+            _delete_tenant_rows_by_ids(
+                cur,
+                table=PROJECTED_DETECTIONS_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="detection_id",
+                ids=stale_detection_ids,
+            )
+            _delete_tenant_rows_by_ids(
+                cur,
+                table=DETECTION_EVENT_EDGE_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="detection_id",
+                ids=stale_detection_ids,
+            )
             states = {
                 "stream_state": get_runtime_stream_state(workspace),
                 "ops_metadata": sanitize_ops_metadata(workspace.load_ops_metadata()),
             }
             for key, payload in states.items():
                 cur.execute(
-                    f"insert into {PROJECTION_STATE_TABLE} (key, payload) values (%s, %s::jsonb)",
+                    f"""
+                    insert into {PROJECTION_STATE_TABLE} (key, payload)
+                    values (%s, %s::jsonb)
+                    on conflict (key) do update set payload = excluded.payload
+                    """,
                     (key, json.dumps(payload)),
                 )
         conn.commit()
     return {
         "dsn": dsn,
-        "event_count": len(workspace.list_normalized_events()),
-        "detection_count": len(workspace.list_detections()),
+        "event_count": len(normalized_events),
+        "detection_count": len(detections),
     }
 
 
@@ -149,12 +514,13 @@ def fetch_projection_overview(dsn: str | None = None) -> dict[str, Any]:
 
 
 def _paginate_rows(
-    table: str,
-    order_by: str,
+    *,
+    query: str,
+    params: tuple[Any, ...],
     limit: int,
     offset: int,
-    *,
     include_total: bool = True,
+    count_query: str | None = None,
     dsn: str | None = None,
 ) -> dict[str, Any]:
     dsn = dsn or default_projection_dsn()
@@ -162,16 +528,13 @@ def _paginate_rows(
         ensure_projection_schema(conn)
         with conn.cursor() as cur:
             total = None
-            if include_total:
-                cur.execute(f"select count(*) as count from {table}")
+            if include_total and count_query is not None:
+                cur.execute(count_query, params[:1] if "%s" in count_query else ())
                 total = cur.fetchone()["count"]
                 query_limit = limit
             else:
                 query_limit = limit + 1
-            cur.execute(
-                f"select payload from {table} order by {order_by} desc limit %s offset %s",
-                (query_limit, offset),
-            )
+            cur.execute(query, (*params, query_limit, offset))
             rows = [row["payload"] for row in cur.fetchall()]
             has_more = offset + len(rows) < total if total is not None else len(rows) > limit
             items = rows[:limit]
@@ -188,13 +551,19 @@ def _paginate_rows(
 
 
 def fetch_projected_events(
+    *,
+    tenant_id: str,
     limit: int = 50,
     offset: int = 0,
     dsn: str | None = None,
 ) -> dict[str, Any]:
     return _paginate_rows(
-        table=PROJECTED_EVENTS_TABLE,
-        order_by="observed_at",
+        query=(
+            f"select event_payload as payload from {HOT_EVENT_INDEX_TABLE} "
+            "where tenant_id = %s "
+            "order by observed_at desc, event_id desc limit %s offset %s"
+        ),
+        params=(tenant_id,),
         limit=limit,
         offset=offset,
         include_total=False,
@@ -203,17 +572,114 @@ def fetch_projected_events(
 
 
 def fetch_projected_detections(
+    *,
+    tenant_id: str,
     limit: int = 50,
     offset: int = 0,
     dsn: str | None = None,
 ) -> dict[str, Any]:
     return _paginate_rows(
-        table=PROJECTED_DETECTIONS_TABLE,
-        order_by="observed_at",
+        query=(
+            f"select payload from {PROJECTED_DETECTIONS_TABLE} "
+            "where tenant_id = %s and coalesce(payload->>'status', 'open') = 'open' "
+            "order by observed_at desc, detection_id desc limit %s offset %s"
+        ),
+        params=(tenant_id,),
         limit=limit,
         offset=offset,
+        count_query=(
+            f"select count(*) as count from {PROJECTED_DETECTIONS_TABLE} "
+            "where tenant_id = %s and coalesce(payload->>'status', 'open') = 'open'"
+        ),
         dsn=dsn,
     )
+
+
+def fetch_hot_event_detail(
+    *,
+    tenant_id: str,
+    event_id: str,
+    dsn: str | None = None,
+) -> dict[str, Any] | None:
+    dsn = dsn or default_projection_dsn()
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        ensure_projection_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                select event_payload, normalized_pointer, raw_pointer, raw_retention_state
+                from {HOT_EVENT_INDEX_TABLE}
+                where tenant_id = %s and event_id = %s
+                """,
+                (tenant_id, event_id),
+            )
+            row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "event_payload": row["event_payload"],
+        "normalized_pointer": row["normalized_pointer"],
+        "raw_pointer": row["raw_pointer"],
+        "raw_retention_state": row["raw_retention_state"],
+    }
+
+
+def fetch_detection_linked_events(
+    *,
+    tenant_id: str,
+    detection_id: str,
+    dsn: str | None = None,
+) -> list[dict[str, Any]]:
+    dsn = dsn or default_projection_dsn()
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        ensure_projection_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                select hei.event_payload as payload
+                from {DETECTION_EVENT_EDGE_TABLE} dee
+                join {HOT_EVENT_INDEX_TABLE} hei on hei.event_id = dee.event_id
+                where dee.tenant_id = %s and dee.detection_id = %s
+                order by dee.ordinal asc
+                """,
+                (tenant_id, detection_id),
+            )
+            rows = cur.fetchall()
+    return [row["payload"] for row in rows]
+
+
+def fetch_timeline_events(
+    *,
+    tenant_id: str,
+    principal_reference: str | None = None,
+    resource_reference: str | None = None,
+    limit: int = 25,
+    dsn: str | None = None,
+) -> list[dict[str, Any]]:
+    filters = ["tenant_id = %s"]
+    params: list[Any] = [tenant_id]
+    if principal_reference is not None:
+        filters.append("(principal_entity_id = %s or principal_id = %s)")
+        params.extend([principal_reference, principal_reference])
+    if resource_reference is not None:
+        filters.append("(resource_entity_id = %s or resource_id = %s)")
+        params.extend([resource_reference, resource_reference])
+    dsn = dsn or default_projection_dsn()
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        ensure_projection_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                select event_payload as payload
+                from {HOT_EVENT_INDEX_TABLE}
+                where {" and ".join(filters)}
+                order by observed_at desc, event_id desc
+                limit %s
+                """,
+                (*params, limit),
+            )
+            rows = cur.fetchall()
+    return [row["payload"] for row in rows]
 
 
 def write_projection_env_file(path: str | Path, dsn: str | None = None) -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
 from typing import Any
 
 from seccloud.defaults import DEFAULT_WORKSPACE
@@ -17,6 +19,7 @@ from seccloud.investigation import (
 from seccloud.local_postgres import (
     init_local_postgres,
     local_postgres_dsn,
+    postgres_paths,
     start_local_postgres,
     stop_local_postgres,
 )
@@ -63,6 +66,89 @@ def _print(payload: Any) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def build_operator_runtime_status(
+    workspace: Workspace,
+    *,
+    dsn: str | None,
+    runtime_root: str | Path = ".",
+) -> dict[str, Any]:
+    from seccloud.projection_store import fetch_projection_overview
+
+    projection: dict[str, Any]
+    try:
+        projection = {
+            "available": True,
+            "overview": fetch_projection_overview(dsn),
+        }
+    except Exception as exc:  # pragma: no cover - depends on local postgres availability
+        projection = {
+            "available": False,
+            "error": str(exc),
+        }
+    paths = postgres_paths(runtime_root)
+    return {
+        "workspace": str(workspace.root),
+        "tenant_id": workspace.tenant_id,
+        "stream_state": get_runtime_stream_state(workspace),
+        "worker_state": get_worker_state(workspace),
+        "worker_control": workspace.load_worker_control(),
+        "intake": {
+            "pending_batch_count": len(workspace.list_pending_intake_batches()),
+            "processed_batch_count": len(workspace.list_processed_intake_batches()),
+        },
+        "postgres": {
+            "root": str(Path(runtime_root).resolve()),
+            "dsn": dsn,
+            "paths": {key: str(value) for key, value in paths.items()},
+            "initialized": paths["data"].exists(),
+        },
+        "projection": projection,
+    }
+
+
+def bootstrap_local_runtime(
+    workspace: Workspace,
+    *,
+    runtime_root: str | Path = ".",
+    reset_stream: bool = False,
+) -> dict[str, Any]:
+    postgres = start_local_postgres(runtime_root)
+    dsn = postgres.get("dsn") or local_postgres_dsn(runtime_root)
+    stream_manifest_path = workspace.manifests_dir / "runtime_stream_manifest.json"
+    if reset_stream or not stream_manifest_path.exists():
+        stream = initialize_runtime_stream(workspace)
+    else:
+        stream = {
+            "status": "already_initialized",
+            **get_runtime_stream_state(workspace),
+        }
+    return {
+        "workspace": str(workspace.root),
+        "tenant_id": workspace.tenant_id,
+        "postgres": postgres,
+        "stream": stream,
+        "api_env": {
+            "SECCLOUD_WORKSPACE": str(workspace.root),
+            "SECCLOUD_PROJECTION_DSN": dsn,
+        },
+    }
+
+
+def run_api_server(
+    workspace: Workspace,
+    *,
+    dsn: str,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    reload: bool = False,
+) -> None:
+    import uvicorn
+
+    os.environ["SECCLOUD_WORKSPACE"] = str(workspace.root)
+    os.environ["SECCLOUD_PROJECTION_DSN"] = dsn
+    uvicorn.run("seccloud.api:app", host=host, port=port, reload=reload)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="seccloud",
@@ -82,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     service_once.add_argument("--dsn")
+    service_once.add_argument("--runtime-root", default=".")
     service_once.add_argument("--max-batches", type=int)
     service_loop = add_workspace_argument(
         subparsers.add_parser(
@@ -90,9 +177,15 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     service_loop.add_argument("--dsn")
+    service_loop.add_argument("--runtime-root", default=".")
     service_loop.add_argument("--poll-interval-seconds", type=float, default=1.0)
     service_loop.add_argument("--max-batches", type=int)
     service_loop.add_argument("--iterations", type=int)
+    service_loop.add_argument(
+        "--exit-when-idle",
+        action="store_true",
+        help="Stop the worker loop after the next idle pass.",
+    )
     add_workspace_argument(
         subparsers.add_parser(
             "show-worker-state",
@@ -169,9 +262,46 @@ def build_parser() -> argparse.ArgumentParser:
     stream_state = add_workspace_argument(subparsers.add_parser("stream-state"))
     stream_state.set_defaults(workspace=DEFAULT_WORKSPACE)
 
-    subparsers.add_parser("init-postgres")
-    subparsers.add_parser("start-postgres")
-    subparsers.add_parser("stop-postgres")
+    runtime_status = add_workspace_argument(
+        subparsers.add_parser(
+            "show-runtime-status",
+            help="Operator-only: inspect local runtime, queue, and projection status.",
+        )
+    )
+    runtime_status.add_argument("--dsn")
+    runtime_status.add_argument("--runtime-root", default=".")
+
+    bootstrap = add_workspace_argument(
+        subparsers.add_parser(
+            "bootstrap-local-runtime",
+            help="Operator-only: start local dependencies and initialize the stream runtime.",
+        )
+    )
+    bootstrap.add_argument("--runtime-root", default=".")
+    bootstrap.add_argument(
+        "--reset-stream",
+        action="store_true",
+        help="Reset the synthetic stream state before starting the local stack.",
+    )
+
+    run_api = add_workspace_argument(
+        subparsers.add_parser(
+            "run-api",
+            help="Operator-only: run the local API server with workspace and Postgres env wired in.",
+        )
+    )
+    run_api.add_argument("--dsn")
+    run_api.add_argument("--runtime-root", default=".")
+    run_api.add_argument("--host", default="127.0.0.1")
+    run_api.add_argument("--port", type=int, default=8000)
+    run_api.add_argument("--reload", action="store_true")
+
+    init_postgres = subparsers.add_parser("init-postgres")
+    init_postgres.add_argument("--runtime-root", default=".")
+    start_postgres_cmd = subparsers.add_parser("start-postgres")
+    start_postgres_cmd.add_argument("--runtime-root", default=".")
+    stop_postgres_cmd = subparsers.add_parser("stop-postgres")
+    stop_postgres_cmd.add_argument("--runtime-root", default=".")
 
     case_summary = add_workspace_argument(subparsers.add_parser("show-case-summary"))
     case_summary.add_argument("--case-id", required=True)
@@ -194,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
         _print(
             run_worker_service_once(
                 workspace,
-                dsn=args.dsn or local_postgres_dsn("."),
+                dsn=args.dsn or local_postgres_dsn(args.runtime_root),
                 max_batches=args.max_batches,
             )
         )
@@ -203,15 +333,43 @@ def main(argv: list[str] | None = None) -> int:
         _print(
             run_worker_service_loop(
                 workspace,
-                dsn=args.dsn or local_postgres_dsn("."),
+                dsn=args.dsn or local_postgres_dsn(args.runtime_root),
                 poll_interval_seconds=args.poll_interval_seconds,
                 max_batches=args.max_batches,
                 max_iterations=args.iterations,
+                exit_when_idle=args.exit_when_idle,
             )
         )
     elif args.command == "show-worker-state":
         assert workspace is not None
         _print(get_worker_state(workspace))
+    elif args.command == "show-runtime-status":
+        assert workspace is not None
+        _print(
+            build_operator_runtime_status(
+                workspace,
+                dsn=args.dsn or local_postgres_dsn(args.runtime_root),
+                runtime_root=args.runtime_root,
+            )
+        )
+    elif args.command == "bootstrap-local-runtime":
+        assert workspace is not None
+        _print(
+            bootstrap_local_runtime(
+                workspace,
+                runtime_root=args.runtime_root,
+                reset_stream=args.reset_stream,
+            )
+        )
+    elif args.command == "run-api":
+        assert workspace is not None
+        run_api_server(
+            workspace,
+            dsn=args.dsn or local_postgres_dsn(args.runtime_root),
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+        )
     elif args.command == "run-source-stats-projector":
         assert workspace is not None
         _print(run_source_stats_projector(workspace))
@@ -302,11 +460,11 @@ def main(argv: list[str] | None = None) -> int:
         assert workspace is not None
         _print(get_runtime_stream_state(workspace))
     elif args.command == "init-postgres":
-        _print(init_local_postgres("."))
+        _print(init_local_postgres(args.runtime_root))
     elif args.command == "start-postgres":
-        _print(start_local_postgres("."))
+        _print(start_local_postgres(args.runtime_root))
     elif args.command == "stop-postgres":
-        _print(stop_local_postgres("."))
+        _print(stop_local_postgres(args.runtime_root))
     elif args.command == "export-founder-artifacts":
         assert workspace is not None
         _print(export_founder_artifacts(workspace))

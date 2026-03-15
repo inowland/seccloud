@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import gzip
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from starlette.requests import Request
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -17,8 +22,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import seccloud.api as seccloud_api
-from seccloud.cli import build_parser
+from seccloud.cli import bootstrap_local_runtime, build_operator_runtime_status, build_parser
 from seccloud.investigation import (
+    acknowledge_detection,
     build_evidence_bundle,
     build_peer_comparison,
     create_case_from_detection,
@@ -27,7 +33,7 @@ from seccloud.investigation import (
     summarize_case,
     update_case,
 )
-from seccloud.local_postgres import _cleanup_stale_runtime_files, postgres_paths
+from seccloud.local_postgres import _cleanup_stale_runtime_files, _wait_for_socket_ready, postgres_paths
 from seccloud.onboarding import (
     build_onboarding_report_markdown,
     build_source_manifest,
@@ -175,6 +181,17 @@ class PoCTestCase(unittest.TestCase):
         self.assertEqual(summary["case_id"], case["case_id"])
         self.assertEqual(summary["primary_detection"]["detection_id"], detection["detection_id"])
         self.assertTrue(summary["case_title"])
+
+    def test_acknowledge_detection_reduces_open_detection_count(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+
+        before = get_runtime_stream_state(self.workspace)
+        updated = acknowledge_detection(self.workspace, detection["detection_id"])
+        after = get_runtime_stream_state(self.workspace)
+
+        self.assertEqual(updated["status"], "acknowledged")
+        self.assertEqual(after["detection_count"], before["detection_count"] - 1)
 
     def test_source_capability_matrix_includes_last_seen_signals(self) -> None:
         run_runtime(self.workspace)
@@ -432,6 +449,44 @@ class PoCTestCase(unittest.TestCase):
         self.assertEqual(len(removed), 1)
         self.assertFalse((paths["data"] / "postmaster.pid").exists())
 
+    def test_wait_for_socket_ready_succeeds_when_socket_exists(self) -> None:
+        paths = postgres_paths(self.tempdir)
+        paths["socket"].mkdir(parents=True)
+        (paths["socket"] / ".s.PGSQL.55432").write_text("", encoding="utf-8")
+
+        _wait_for_socket_ready(paths, timeout_seconds=0.01, poll_interval_seconds=0.001)
+
+    def test_wait_for_socket_ready_times_out_when_socket_missing(self) -> None:
+        paths = postgres_paths(self.tempdir)
+        paths["socket"].mkdir(parents=True)
+
+        with self.assertRaises(RuntimeError):
+            _wait_for_socket_ready(paths, timeout_seconds=0.01, poll_interval_seconds=0.001)
+
+    def test_start_local_postgres_recovers_from_stale_running_status(self) -> None:
+        completed = subprocess.CompletedProcess(args=["pg_ctl"], returncode=0, stdout="", stderr="")
+
+        with (
+            patch("seccloud.local_postgres.init_local_postgres", return_value={"status": "already_initialized"}),
+            patch("seccloud.local_postgres._run_pg_ctl", return_value=completed),
+            patch(
+                "seccloud.local_postgres._wait_for_socket_ready",
+                side_effect=[RuntimeError("Local Postgres did not create its socket within 1.0s"), None],
+            ),
+            patch("seccloud.local_postgres._stop_pg_ctl"),
+            patch("seccloud.local_postgres._cleanup_stale_runtime_files", return_value=["stale.pid"]),
+            patch("seccloud.local_postgres._ensure_database", return_value="already_exists"),
+            patch("seccloud.local_postgres._postgres_binary", return_value="/opt/homebrew/bin/pg_ctl"),
+            patch("seccloud.local_postgres.subprocess.run"),
+        ):
+            from seccloud.local_postgres import start_local_postgres
+
+            result = start_local_postgres(self.tempdir)
+
+        self.assertEqual(result["status"], "started")
+        self.assertEqual(result["database_status"], "already_exists")
+        self.assertEqual(result["stale_files_removed"], ["stale.pid"])
+
     def test_runtime_stream_advances_incrementally(self) -> None:
         initialized = initialize_runtime_stream(self.workspace)
         after_first = advance_runtime_stream(self.workspace, batch_size=7)
@@ -466,6 +521,9 @@ class PoCTestCase(unittest.TestCase):
             "run-worker-service-once",
             "run-source-stats-projector",
             "show-worker-state",
+            "show-runtime-status",
+            "bootstrap-local-runtime",
+            "run-api",
         ):
             self.assertIn(command, subparsers.choices)
 
@@ -629,6 +687,15 @@ class PoCTestCase(unittest.TestCase):
             {
                 "SECCLOUD_WORKSPACE": str(self.workspace.root),
                 "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                "SECCLOUD_PUSH_AUTH_TOKENS": json.dumps(
+                    {
+                        "push-token": {
+                            "tenant_id": self.workspace.tenant_id,
+                            "source": "okta",
+                            "integration_id": "okta-primary",
+                        }
+                    }
+                ),
             },
             clear=False,
         ):
@@ -639,37 +706,96 @@ class PoCTestCase(unittest.TestCase):
             worker_state_endpoint = next(
                 route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/workers/state"
             )
-            intake_request = seccloud_api.IntakeRequest(
-                source="okta",
-                records=[
+            body = gzip.compress(
+                json.dumps(
                     {
-                        "source_event_id": "okta-api-0001",
-                        "observed_at": "2026-02-11T10:00:00Z",
-                        "received_at": "2026-02-11T10:01:00Z",
-                        "actor_email": "alice@example.com",
-                        "actor_name": "Alice Admin",
-                        "department": "security",
-                        "role": "security-admin",
-                        "event_type": "login",
-                        "resource_id": "okta:admin-console",
-                        "resource_name": "Admin Console",
-                        "resource_kind": "app",
-                        "sensitivity": "high",
-                        "geo": "US-NY",
-                        "ip": "10.0.0.1",
-                        "privileged": True,
+                        "source": "okta",
+                        "records": [
+                            {
+                                "source_event_id": "okta-api-0001",
+                                "observed_at": "2026-02-11T10:00:00Z",
+                                "received_at": "2026-02-11T10:01:00Z",
+                                "actor_email": "alice@example.com",
+                                "actor_name": "Alice Admin",
+                                "department": "security",
+                                "role": "security-admin",
+                                "event_type": "login",
+                                "resource_id": "okta:admin-console",
+                                "resource_name": "Admin Console",
+                                "resource_kind": "app",
+                                "sensitivity": "high",
+                                "geo": "US-NY",
+                                "ip": "10.0.0.1",
+                                "privileged": True,
+                            }
+                        ],
                     }
-                ],
+                ).encode("utf-8")
             )
 
-            intake_response = intake_endpoint(intake_request)
+            async def receive() -> dict[str, object]:
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            intake_response = asyncio.run(
+                intake_endpoint(
+                    request=Request(
+                        {
+                            "type": "http",
+                            "method": "POST",
+                            "path": "/api/intake/raw-events",
+                            "headers": [
+                                (b"content-encoding", b"gzip"),
+                                (b"content-type", b"application/json"),
+                            ],
+                            "query_string": b"",
+                            "client": ("testclient", 123),
+                            "server": ("testserver", 80),
+                            "scheme": "http",
+                            "http_version": "1.1",
+                        },
+                        receive,
+                    ),
+                    authorization="Bearer push-token",
+                    idempotency_key=None,
+                )
+            )
             worker_state = worker_state_endpoint()
 
         self.assertEqual(intake_response["source"], "okta")
+        self.assertEqual(intake_response["integration_id"], "okta-primary")
         self.assertEqual(intake_response["record_count"], 1)
         self.assertEqual(worker_state["pending_batch_count"], 1)
         self.assertEqual(worker_state["processed_batch_count"], 0)
         self.assertEqual(len(self.workspace.list_normalized_events()), 0)
+
+    def test_api_acknowledge_detection_updates_status(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SECCLOUD_WORKSPACE": str(self.workspace.root),
+                    "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                },
+                clear=False,
+            ),
+            patch("seccloud.api.sync_workspace_projection", return_value={"detection_count": 0}),
+        ):
+            app = seccloud_api.create_app()
+            acknowledge_endpoint = next(
+                route.endpoint
+                for route in app.routes
+                if getattr(route, "path", None) == "/api/detections/{detection_id}/acknowledge"
+            )
+            response = acknowledge_endpoint(detection["detection_id"])
+
+        self.assertEqual(response["status"], "acknowledged")
+        self.assertEqual(
+            self.workspace.get_detection(detection["detection_id"])["status"],
+            "acknowledged",
+        )
 
     def test_api_stream_advance_enqueues_without_processing(self) -> None:
         with patch.dict(
@@ -816,6 +942,50 @@ class PoCTestCase(unittest.TestCase):
         self.assertEqual(result["idle_iterations"], 2)
         self.assertEqual(worker_state["service_runs"], 2)
         self.assertEqual(worker_state["last_service_status"], "idle")
+
+    def test_worker_service_loop_can_exit_when_idle(self) -> None:
+        result = run_worker_service_loop(
+            self.workspace,
+            dsn="postgresql://projection",
+            poll_interval_seconds=0,
+            exit_when_idle=True,
+        )
+
+        worker_state = get_worker_state(self.workspace)
+        self.assertEqual(result["iterations"], 1)
+        self.assertEqual(result["idle_iterations"], 1)
+        self.assertEqual(worker_state["service_runs"], 1)
+        self.assertEqual(worker_state["last_service_status"], "idle")
+
+    def test_operator_runtime_status_aggregates_runtime_state(self) -> None:
+        initialize_runtime_stream(self.workspace)
+        with patch(
+            "seccloud.projection_store.fetch_projection_overview",
+            return_value={"stream_state": {"cursor": 0}, "ops_metadata": {"dead_letter_count": 0}},
+        ):
+            status = build_operator_runtime_status(
+                self.workspace,
+                dsn="postgresql://projection",
+                runtime_root=self.tempdir,
+            )
+
+        self.assertEqual(status["workspace"], str(self.workspace.root))
+        self.assertEqual(status["tenant_id"], self.workspace.tenant_id)
+        self.assertIn("worker_state", status)
+        self.assertIn("stream_state", status)
+        self.assertTrue(status["projection"]["available"])
+        self.assertEqual(status["postgres"]["root"], str(self.tempdir.resolve()))
+
+    def test_bootstrap_local_runtime_starts_postgres_and_initializes_stream(self) -> None:
+        with patch(
+            "seccloud.cli.start_local_postgres", return_value={"status": "started", "dsn": "postgresql://runtime"}
+        ):
+            result = bootstrap_local_runtime(self.workspace, runtime_root=self.tempdir)
+
+        self.assertEqual(result["workspace"], str(self.workspace.root))
+        self.assertEqual(result["postgres"]["status"], "started")
+        self.assertEqual(result["stream"]["status"], "initialized")
+        self.assertEqual(result["api_env"]["SECCLOUD_PROJECTION_DSN"], "postgresql://runtime")
 
     def test_worker_service_once_projects_after_stream_reset_without_pending_batches(self) -> None:
         initialize_runtime_stream(self.workspace)

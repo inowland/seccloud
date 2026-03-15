@@ -174,6 +174,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/detections/{detection_id}/acknowledge": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Detection Acknowledge */
+    post: operations["detection_acknowledge_api_detections__detection_id__acknowledge_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/source-capability": {
     parameters: {
       query?: never;
@@ -358,34 +375,24 @@ export interface components {
     IntakeAccepted: {
       /** Batch Id */
       batch_id: string;
+      /** Tenant Id */
+      tenant_id: string;
       /** Source */
       source: string;
+      /** Integration Id */
+      integration_id: string;
       /** Record Count */
       record_count: number;
-      /** Path */
-      path: string;
-    };
-    /** IntakeRequest */
-    IntakeRequest: {
-      /** Source */
-      source: string;
-      /**
-       * Intake Kind
-       * @default push_gateway
-       */
-      intake_kind: string;
-      /** Integration Id */
-      integration_id?: string | null;
-      /** Received At */
-      received_at?: string | null;
-      /** Records */
-      records: {
-        [key: string]: unknown;
-      }[];
-      /** Metadata */
-      metadata?: {
-        [key: string]: unknown;
-      } | null;
+      /** Manifest Key */
+      manifest_key: string;
+      /** Object Key */
+      object_key: string;
+      /** Idempotency Key */
+      idempotency_key: string;
+      /** Duplicate */
+      duplicate: boolean;
+      /** Queue Path */
+      queue_path: string;
     };
     /** OpsMetadata */
     OpsMetadata: {
@@ -635,15 +642,14 @@ export interface operations {
   intake_raw_events_api_intake_raw_events_post: {
     parameters: {
       query?: never;
-      header?: never;
+      header?: {
+        authorization?: string | null;
+        "Idempotency-Key"?: string | null;
+      };
       path?: never;
       cookie?: never;
     };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["IntakeRequest"];
-      };
-    };
+    requestBody?: never;
     responses: {
       /** @description Successful Response */
       202: {
@@ -858,6 +864,37 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["DetectionDetail"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  detection_acknowledge_api_detections__detection_id__acknowledge_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        detection_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Detection"];
         };
       };
       /** @description Validation Error */

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,17 +35,28 @@ def postgres_paths(root: str | Path) -> dict[str, Path]:
     preferred = root_path / ".seccloud" / "postgres"
     legacy = root_path / ".demo" / "postgres"
     base = legacy if legacy.exists() and not preferred.exists() else preferred
+    socket_suffix = hashlib.sha1(str(base).encode("utf-8")).hexdigest()[:12]
+    socket_dir = Path("/tmp") / f"seccloud-pg-{socket_suffix}"
     return {
         "base": base,
         "data": base / "data",
         "log": base / "postgres.log",
-        "socket": base / "socket",
+        "socket": socket_dir,
     }
 
 
 def _run_pg_ctl(paths: dict[str, Path], action: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [_postgres_binary("pg_ctl"), "-D", str(paths["data"]), action],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _stop_pg_ctl(paths: dict[str, Path], *, mode: str = "fast") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [_postgres_binary("pg_ctl"), "-D", str(paths["data"]), "stop", "-m", mode],
         check=False,
         capture_output=True,
         text=True,
@@ -142,6 +155,26 @@ def _ensure_database(paths: dict[str, Path]) -> str:
     raise RuntimeError(result.stderr.strip() or "createdb failed")
 
 
+def _wait_for_socket_ready(
+    paths: dict[str, Path],
+    *,
+    timeout_seconds: float = 5.0,
+    poll_interval_seconds: float = 0.1,
+) -> None:
+    socket_path = paths["socket"] / f".s.PGSQL.{DEFAULT_PROJECTION_PGPORT}"
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if socket_path.exists():
+            return
+        time.sleep(poll_interval_seconds)
+    raise RuntimeError(f"Local Postgres did not create its socket within {timeout_seconds:.1f}s: {socket_path}")
+
+
+def _is_missing_socket_error(exc: RuntimeError) -> bool:
+    message = str(exc)
+    return "No such file or directory" in message or "did not create its socket" in message
+
+
 def init_local_postgres(root: str | Path) -> dict[str, Any]:
     paths = postgres_paths(root)
     paths["base"].mkdir(parents=True, exist_ok=True)
@@ -163,15 +196,22 @@ def start_local_postgres(root: str | Path) -> dict[str, Any]:
     stale_files_removed: list[str] = []
 
     if status.returncode == 0:
-        database_status = _ensure_database(paths)
-        return {
-            "status": "already_running",
-            "data_dir": str(paths["data"]),
-            "database_status": database_status,
-            "dsn": local_postgres_dsn(root),
-            "initialized": init_result["status"] == "initialized",
-            "log_path": str(paths["log"]),
-        }
+        try:
+            _wait_for_socket_ready(paths, timeout_seconds=1.0)
+            database_status = _ensure_database(paths)
+            return {
+                "status": "already_running",
+                "data_dir": str(paths["data"]),
+                "database_status": database_status,
+                "dsn": local_postgres_dsn(root),
+                "initialized": init_result["status"] == "initialized",
+                "log_path": str(paths["log"]),
+            }
+        except RuntimeError as exc:
+            if not _is_missing_socket_error(exc):
+                raise
+            _stop_pg_ctl(paths)
+            stale_files_removed = _cleanup_stale_runtime_files(paths)
 
     if status.returncode == 3:
         stale_files_removed = _cleanup_stale_runtime_files(paths)
@@ -184,11 +224,12 @@ def start_local_postgres(root: str | Path) -> dict[str, Any]:
             "-l",
             str(paths["log"]),
             "-o",
-            f"-k {paths['socket']} -p {DEFAULT_PROJECTION_PGPORT}",
+            f"-k {paths['socket']} -p {DEFAULT_PROJECTION_PGPORT} -c listen_addresses=''",
             "start",
         ],
         check=True,
     )
+    _wait_for_socket_ready(paths)
     database_status = _ensure_database(paths)
     return {
         "status": "started",

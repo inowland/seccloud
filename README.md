@@ -56,20 +56,19 @@ Notes:
 
 - If `uv sync` already finds Python 3.12, you can skip `uv python install 3.12`.
 
-### 3. Start the API stack
+### 3. Bootstrap the local runtime and start the api
 
 Open Terminal 1 in the repo root and run:
 
 ```bash
 source .venv/bin/activate
-seccloud start-postgres
-seccloud init-stream
-uvicorn seccloud.api:app --host 127.0.0.1 --port 8000
+seccloud bootstrap-local-runtime --reset-stream
+seccloud run-api --reload
 ```
 
 Leave that terminal running.
 
-### 4. Start the worker loop
+### 5. Start the worker loop
 
 Open Terminal 2 in the repo root and run:
 
@@ -80,7 +79,15 @@ seccloud run-worker-service --poll-interval-seconds 1
 
 Leave that terminal running.
 
-### 5. Start the frontend
+If you want to drain pending work and exit instead of running continuously:
+
+```bash
+seccloud run-worker-service --poll-interval-seconds 0 --exit-when-idle
+```
+
+If the worker needs to be restarted during local development, just run the same command again. Queue state and worker state are persisted under the workspace, so the restarted loop resumes from the pending intake queue instead of relying on the browser to trigger processing.
+
+### 6. Start the frontend
 
 Open Terminal 3 in the repo root and run:
 
@@ -103,6 +110,20 @@ source .venv/bin/activate
 python -m unittest discover -s tests -v
 seccloud run-runtime
 seccloud show-source-capability-matrix
+```
+
+If you want a single operator status view:
+
+```bash
+source .venv/bin/activate
+seccloud show-runtime-status
+```
+
+If you want a one-shot recovery drain without leaving a loop running:
+
+```bash
+source .venv/bin/activate
+seccloud run-worker-service-once
 ```
 
 ## Object Store Configuration
@@ -135,9 +156,22 @@ These are useful for local operations and debugging, not for the normal product 
 
 ```bash
 source .venv/bin/activate
+seccloud bootstrap-local-runtime
+seccloud run-api
 seccloud run-worker-service-once
+seccloud run-worker-service --exit-when-idle --poll-interval-seconds 0
 seccloud show-worker-state
+seccloud show-runtime-status
+seccloud start-postgres
+seccloud stop-postgres
 ```
+
+Notes:
+
+- `seccloud run-api` wires `SECCLOUD_WORKSPACE` and `SECCLOUD_PROJECTION_DSN` for you.
+- `seccloud show-runtime-status` aggregates stream state, worker state, queue depth, and projection availability.
+- `seccloud run-worker-service --exit-when-idle` is useful for operator-driven recovery and backlog draining.
+- `seccloud run-worker-service-once` is the narrowest recovery command when you want to drain one pass and inspect the result before starting the continuous loop.
 
 ## Repo Map
 

@@ -31,9 +31,12 @@ interface FormattingHelpers {
 }
 
 interface DetectionDetailContentProps extends FormattingHelpers {
+  acknowledging: boolean;
   badgeToneForSeverity: (severity: string) => BadgeTone;
   detail: DetectionDetail;
+  onAcknowledge: () => void;
   openEventPage: (eventId: string) => void;
+  stackSummaryCards?: boolean;
 }
 
 interface EventDetailContentProps {
@@ -56,47 +59,85 @@ interface IntegrationDetailContentProps {
 }
 
 export function DetectionDetailContent({
+  acknowledging,
   badgeToneForSeverity,
   detail,
   formatNumber,
   formatObservedAt,
   formatSourceName,
+  onAcknowledge,
   openEventPage,
+  stackSummaryCards = false,
 }: DetectionDetailContentProps) {
   return (
     <div className="detail-pane">
       <div className="detail-hero">
-        <div>
-          <span
-            className={`badge badge--${badgeToneForSeverity(
-              detail.detection.severity,
-            )}`}
+        <div className="detail-hero__content">
+          <div>
+            <span
+              className={`badge badge--${badgeToneForSeverity(
+                detail.detection.severity,
+              )}`}
+            >
+              {detail.detection.severity}
+            </span>
+            <h3>{detail.detection.title}</h3>
+            <p className="detail-subtle">{detail.detection.scenario}</p>
+          </div>
+        </div>
+        <div className="detail-hero__actions">
+          <button
+            disabled={acknowledging || detail.detection.status !== "open"}
+            onClick={onAcknowledge}
+            type="button"
           >
-            {detail.detection.severity}
-          </span>
-          <h3>{detail.detection.title}</h3>
-          <p className="detail-subtle">{detail.detection.scenario}</p>
+            {detail.detection.status === "open"
+              ? acknowledging
+                ? "Acknowledging..."
+                : "Acknowledge"
+              : "Acknowledged"}
+          </button>
         </div>
       </div>
 
-      <div className="mini-metrics">
-        <div className="mini-metric">
-          <span>Score</span>
-          <strong>{detail.detection.score.toFixed(2)}</strong>
-        </div>
-        <div className="mini-metric">
-          <span>Confidence</span>
-          <strong>{detail.detection.confidence.toFixed(2)}</strong>
-        </div>
-        <div className="mini-metric">
-          <span>Evidence</span>
-          <strong>
-            {formatNumber(detail.evidence_bundle.evidence_items.length)}
-          </strong>
-        </div>
-      </div>
+      <DetailSectionCard title="Detection summary">
+        <dl className="detail-field-grid">
+          <div className="detail-field">
+            <dt>Severity</dt>
+            <dd>{detail.detection.severity}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Status</dt>
+            <dd>{detail.detection.status}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Score</dt>
+            <dd>{detail.detection.score.toFixed(2)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Confidence</dt>
+            <dd>{detail.detection.confidence.toFixed(2)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Evidence items</dt>
+            <dd>
+              {formatNumber(detail.evidence_bundle.evidence_items.length)}
+            </dd>
+          </div>
+          <div className="detail-field">
+            <dt>Related events</dt>
+            <dd>{formatNumber(detail.events.length)}</dd>
+          </div>
+        </dl>
+      </DetailSectionCard>
 
-      <div className="detail-section-grid">
+      <div
+        className={
+          stackSummaryCards
+            ? "detail-section-grid detail-section-grid--stacked"
+            : "detail-section-grid"
+        }
+      >
         <DetailSectionCard title="Reasons">
           <ul className="flat-list">
             {detail.detection.reasons.map((reason) => (
@@ -106,19 +147,24 @@ export function DetectionDetailContent({
         </DetailSectionCard>
 
         <DetailSectionCard title="Peer context">
-          <div className="panel-note">
-            Principal events:{" "}
-            {formatNumber(detail.peer_comparison.principal_total_events)}. Prior
-            accesses to resource:{" "}
-            {formatNumber(
-              detail.peer_comparison.principal_prior_resource_access_count,
-            )}
-            . Peer-group accesses:{" "}
-            {formatNumber(
-              detail.peer_comparison.peer_group_resource_access_count,
-            )}
-            .
-          </div>
+          <ul className="flat-list">
+            <li>
+              Principal events:{" "}
+              {formatNumber(detail.peer_comparison.principal_total_events)}
+            </li>
+            <li>
+              Prior accesses to resource:{" "}
+              {formatNumber(
+                detail.peer_comparison.principal_prior_resource_access_count,
+              )}
+            </li>
+            <li>
+              Peer-group accesses:{" "}
+              {formatNumber(
+                detail.peer_comparison.peer_group_resource_access_count,
+              )}
+            </li>
+          </ul>
         </DetailSectionCard>
       </div>
 
@@ -169,34 +215,64 @@ export function EventDetailContent({
   return (
     <div className="detail-pane">
       <div className="detail-hero">
-        <span className="badge badge--neutral">
-          {formatSourceName(event.source)}
-        </span>
-        <h3>{event.principal.display_name}</h3>
-        <p className="detail-subtle">
-          {formatObservedAt(event.observed_at)} • {event.action.verb}
-        </p>
-      </div>
-
-      <div className="mini-metrics">
-        <div className="mini-metric">
-          <span>Resource</span>
-          <strong>{event.resource.name}</strong>
-        </div>
-        <div className="mini-metric">
-          <span>Sensitivity</span>
-          <strong>{event.resource.sensitivity}</strong>
-        </div>
-        <div className="mini-metric">
-          <span>Evidence</span>
-          <strong>{event.evidence.object_key}</strong>
+        <div className="detail-hero__content">
+          <span className="badge badge--neutral">
+            {formatSourceName(event.source)}
+          </span>
+          <h3>
+            {event.principal.display_name} {event.action.verb}{" "}
+            {event.resource.name}
+          </h3>
+          <p className="detail-subtle">{formatObservedAt(event.observed_at)}</p>
         </div>
       </div>
 
-      <DetailSectionCard title="Overview">
-        <div className="panel-note">
-          {event.action.verb} {event.resource.name} on{" "}
-          {formatSourceName(event.source)}.
+      <DetailSectionCard title="Event summary">
+        <dl className="detail-field-grid">
+          <div className="detail-field">
+            <dt>Actor</dt>
+            <dd>{event.principal.display_name}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Observed</dt>
+            <dd>{formatObservedAt(event.observed_at)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Source</dt>
+            <dd>{formatSourceName(event.source)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Action</dt>
+            <dd>{event.action.verb}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Action type</dt>
+            <dd>{event.action.category}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Resource</dt>
+            <dd>{event.resource.name}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Sensitivity</dt>
+            <dd>{event.resource.sensitivity}</dd>
+          </div>
+        </dl>
+      </DetailSectionCard>
+
+      <DetailSectionCard
+        title="Source record"
+        subtitle="Trace this normalized event back to the provider event and stored raw payload."
+      >
+        <div className="list-stack list-stack--tight">
+          <div className="mini-card">
+            <div>Provider event ID</div>
+            <div className="detail-subtle">{event.source_event_id}</div>
+          </div>
+          <div className="mini-card">
+            <div>Stored raw record key</div>
+            <div className="detail-subtle">{event.evidence.object_key}</div>
+          </div>
         </div>
       </DetailSectionCard>
 
@@ -228,42 +304,49 @@ export function IntegrationDetailContent({
   return (
     <div className="detail-pane">
       <div className="detail-hero">
-        <div>
+        <div className="detail-hero__content">
+          <span className="badge badge--neutral">{source}</span>
           <h3>{details.display_name}</h3>
-          <p className="detail-subtle">{source}</p>
+          <p className="detail-subtle">{status.note}</p>
         </div>
         <span className={`badge badge--${status.tone}`}>{status.label}</span>
       </div>
 
-      <div className="panel-note">{status.note}</div>
-      <div className="panel-note">
-        Window anchor:{" "}
-        {details.recent_window_anchor_at
-          ? formatObservedAt(details.recent_window_anchor_at)
-          : "Waiting for source activity."}
-      </div>
-
-      <div className="mini-metrics">
-        <div className="mini-metric">
-          <span>24h landed</span>
-          <strong>{formatNumber(details.raw_24h_count)}</strong>
-        </div>
-        <div className="mini-metric">
-          <span>24h normalized</span>
-          <strong>{formatNumber(details.normalized_24h_count)}</strong>
-        </div>
-        <div className="mini-metric">
-          <span>7d dead letters</span>
-          <strong>{formatNumber(details.dead_letter_7d_count)}</strong>
-        </div>
-        <div className="mini-metric">
-          <span>Field coverage</span>
-          <strong>
-            {formatNumber(coverageCount)}/
-            {formatNumber(details.required_fields.length)}
-          </strong>
-        </div>
-      </div>
+      <DetailSectionCard title="Integration summary">
+        <dl className="detail-field-grid">
+          <div className="detail-field">
+            <dt>Status</dt>
+            <dd>{status.label}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Window anchor</dt>
+            <dd>
+              {details.recent_window_anchor_at
+                ? formatObservedAt(details.recent_window_anchor_at)
+                : "Waiting for source activity."}
+            </dd>
+          </div>
+          <div className="detail-field">
+            <dt>24h landed</dt>
+            <dd>{formatNumber(details.raw_24h_count)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>24h normalized</dt>
+            <dd>{formatNumber(details.normalized_24h_count)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>7d dead letters</dt>
+            <dd>{formatNumber(details.dead_letter_7d_count)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Field coverage</dt>
+            <dd>
+              {formatNumber(coverageCount)}/
+              {formatNumber(details.required_fields.length)}
+            </dd>
+          </div>
+        </dl>
+      </DetailSectionCard>
 
       <div className="token-row">
         {details.missing_required_event_types.map((eventType) => (
@@ -276,11 +359,11 @@ export function IntegrationDetailContent({
             Missing field: {field}
           </span>
         ))}
-        {details.dead_letter_count === 0 &&
+        {details.dead_letter_7d_count === 0 &&
         details.missing_required_event_types.length === 0 &&
         details.missing_required_fields.length === 0 ? (
           <span className="token token--positive">
-            Contract currently satisfied
+            No current contract issues
           </span>
         ) : null}
       </div>

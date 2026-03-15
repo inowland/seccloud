@@ -27,16 +27,40 @@
       "post": {
         "summary": "Intake Raw Events",
         "operationId": "intake_raw_events_api_intake_raw_events_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IntakeRequest"
-              }
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           },
-          "required": true
-        },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "responses": {
           "202": {
             "description": "Successful Response",
@@ -303,6 +327,45 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DetectionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/detections/{detection_id}/acknowledge": {
+      "post": {
+        "summary": "Detection Acknowledge",
+        "operationId": "detection_acknowledge_api_detections__detection_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "detection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Detection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Detection"
                 }
               }
             }
@@ -776,82 +839,58 @@
             "type": "string",
             "title": "Batch Id"
           },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
           "source": {
             "type": "string",
             "title": "Source"
+          },
+          "integration_id": {
+            "type": "string",
+            "title": "Integration Id"
           },
           "record_count": {
             "type": "integer",
             "title": "Record Count"
           },
-          "path": {
+          "manifest_key": {
             "type": "string",
-            "title": "Path"
+            "title": "Manifest Key"
+          },
+          "object_key": {
+            "type": "string",
+            "title": "Object Key"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "duplicate": {
+            "type": "boolean",
+            "title": "Duplicate"
+          },
+          "queue_path": {
+            "type": "string",
+            "title": "Queue Path"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["batch_id", "source", "record_count", "path"],
+        "required": [
+          "batch_id",
+          "tenant_id",
+          "source",
+          "integration_id",
+          "record_count",
+          "manifest_key",
+          "object_key",
+          "idempotency_key",
+          "duplicate",
+          "queue_path"
+        ],
         "title": "IntakeAccepted"
-      },
-      "IntakeRequest": {
-        "properties": {
-          "source": {
-            "type": "string",
-            "title": "Source"
-          },
-          "intake_kind": {
-            "type": "string",
-            "title": "Intake Kind",
-            "default": "push_gateway"
-          },
-          "integration_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Integration Id"
-          },
-          "received_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Received At"
-          },
-          "records": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Records"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": ["source", "records"],
-        "title": "IntakeRequest"
       },
       "OpsMetadata": {
         "properties": {
