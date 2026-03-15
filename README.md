@@ -179,7 +179,7 @@ Notes:
 - [tests](tests): tests
 - [examples](examples): fixture bundles and reference inputs
 - [web](web): React/Vite frontend
-- [project](project): internal specs, plans, and engineering notes
+- [project/plan](project/plan): milestone plan (M0–M6) for production build-out
 
 Runtime state is generated locally under `.seccloud/runtime` by default and is gitignored.
 
