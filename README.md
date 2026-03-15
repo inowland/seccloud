@@ -44,7 +44,6 @@ If you already installed a versioned Homebrew Postgres formula and those command
 From the repo root:
 
 ```bash
-export UV_CACHE_DIR=.uv-cache
 uv python install 3.12
 uv sync
 source .venv/bin/activate
