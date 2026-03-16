@@ -71,15 +71,12 @@ type SourceCapabilityMatrix = JsonResponse<"/api/source-capability", "get">;
 type SourceCapabilityDetails = components["schemas"]["SourceCapabilityDetails"];
 type Pagination = components["schemas"]["Pagination"];
 type StreamState = components["schemas"]["StreamState"];
-type WorkerState = JsonResponse<"/api/workers/state", "get">;
-
 interface AppData {
   overview: Overview;
   detections: DetectionList;
   events: EventList;
   sourceCapability: SourceCapabilityMatrix;
   streamState: StreamState;
-  workerState: WorkerState;
 }
 
 interface Counts {
@@ -112,7 +109,6 @@ interface DetailPaneProps {
 interface StreamOverlayProps {
   busy: boolean;
   streamState: StreamState;
-  workerState: WorkerState;
   performAction: (path: string) => Promise<void>;
 }
 
@@ -206,16 +202,6 @@ const emptyStreamState: StreamState = {
   total_source_events: 0,
   complete: false,
 };
-const emptyWorkerState: WorkerState = {
-  normalization_runs: 0,
-  detection_runs: 0,
-  source_stats_runs: 0,
-  projection_runs: 0,
-  service_runs: 0,
-  last_source_stats_at: null,
-  pending_batch_count: 0,
-  processed_batch_count: 0,
-};
 const emptyPagination: Pagination = {
   limit: 0,
   offset: 0,
@@ -307,7 +293,6 @@ async function fetchDashboardData(
     events,
     sourceCapability,
     streamState,
-    workerState,
   ] = await Promise.all([
     fetchJson<Overview>("/api/overview"),
     fetchJson<DetectionList>(
@@ -318,7 +303,6 @@ async function fetchDashboardData(
     ),
     fetchJson<SourceCapabilityMatrix>("/api/source-capability"),
     fetchJson<StreamState>("/api/stream/state"),
-    fetchJson<WorkerState>("/api/workers/state"),
   ]);
 
   return {
@@ -327,7 +311,6 @@ async function fetchDashboardData(
     events,
     sourceCapability,
     streamState,
-    workerState,
   };
 }
 
@@ -339,7 +322,6 @@ function applyDashboardData(
     setEvents: (value: EventList) => void;
     setSourceCapability: (value: SourceCapabilityMatrix) => void;
     setStreamState: (value: StreamState) => void;
-    setWorkerState: (value: WorkerState) => void;
     setError: (value: string) => void;
   },
 ) {
@@ -349,7 +331,6 @@ function applyDashboardData(
     actions.setEvents(data.events);
     actions.setSourceCapability(data.sourceCapability);
     actions.setStreamState(data.streamState);
-    actions.setWorkerState(data.workerState);
   });
   actions.setError("");
 }
@@ -1620,7 +1601,6 @@ function IntegrationDetailPane({
 function StreamOverlay({
   busy,
   streamState,
-  workerState,
   performAction,
 }: StreamOverlayProps) {
   return (
@@ -1683,7 +1663,6 @@ export function App() {
   const [eventsOffset, setEventsOffset] = useState(0);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [streamState, setStreamState] = useState<StreamState>(emptyStreamState);
-  const [workerState, setWorkerState] = useState<WorkerState>(emptyWorkerState);
   const [detections, setDetections] = useState<DetectionList>({
     items: [],
     page: emptyPagination,
@@ -1741,7 +1720,6 @@ export function App() {
         setEvents,
         setSourceCapability,
         setStreamState,
-        setWorkerState,
         setError,
       });
     } catch (loadError) {
@@ -1759,7 +1737,6 @@ export function App() {
           setEvents,
           setSourceCapability,
           setStreamState,
-          setWorkerState,
           setError,
         });
       } catch (loadError) {
@@ -2776,7 +2753,6 @@ export function App() {
       <StreamOverlay
         busy={busy}
         streamState={streamState}
-        workerState={workerState}
         performAction={performAction}
       />
     </div>
