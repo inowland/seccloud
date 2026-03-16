@@ -165,7 +165,7 @@ def initialize_runtime_stream(
             source_events,
             principals,
             teams,
-            epochs=10,
+            epochs=5,
             seed=seed,
         )
         write_json(

@@ -146,7 +146,13 @@ def run_api_server(
 
     os.environ["SECCLOUD_WORKSPACE"] = str(workspace.root)
     os.environ["SECCLOUD_PROJECTION_DSN"] = dsn
-    uvicorn.run("seccloud.api:app", host=host, port=port, reload=reload)
+    uvicorn.run(
+        "seccloud.api:app",
+        host=host,
+        port=port,
+        reload=reload,
+        timeout_graceful_shutdown=1,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

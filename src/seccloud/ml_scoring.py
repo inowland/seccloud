@@ -124,7 +124,7 @@ def precompute_detections(
     principals: list[OrgPrincipal],
     teams: list[OrgTeam],
     *,
-    epochs: int = 10,
+    epochs: int = 5,
     seed: int = 42,
 ) -> list[PrecomputedDetection]:
     """Run the full ML pipeline and produce pre-computed detections.
@@ -148,7 +148,7 @@ def precompute_detections(
         action_hidden=[256, 128],
         context_hidden=[256, 128],
         n_positive=10,
-        batch_size=512,
+        batch_size=1024,
         learning_rate=3e-4,
         epochs=epochs,
     )
