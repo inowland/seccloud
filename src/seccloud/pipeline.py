@@ -322,6 +322,7 @@ def _replay_precomputed_detections(workspace: Workspace) -> dict[str, Any]:
     existing_detection_ids = {item["detection_id"] for item in workspace.list_detections()}
     new_detections = 0
 
+    new_det_dicts: list[dict[str, Any]] = []
     for pdet in detections:
         if pdet.trigger_cursor > cursor:
             continue
@@ -337,13 +338,77 @@ def _replay_precomputed_detections(workspace: Workspace) -> dict[str, Any]:
         det_dict["event_ids"] = resolved_event_ids
         workspace.save_detection(det_dict)
         existing_detection_ids.add(det.detection_id)
-        new_detections += 1
+        new_det_dicts.append(det_dict)
+
+    # Project new detections to postgres immediately so they appear in the
+    # UI without waiting for the full event projection sync.
+    if new_det_dicts:
+        _project_detections_fast(workspace, new_det_dicts)
 
     return {
         "normalized_event_count": cursor,
-        "new_detection_count": new_detections,
+        "new_detection_count": len(new_det_dicts),
         "total_detection_count": len(existing_detection_ids),
     }
+
+
+def _project_detections_fast(
+    workspace: Workspace, detections: list[dict[str, Any]],
+) -> None:
+    """Project detections directly to postgres without scanning event files."""
+    import json
+
+    from seccloud.local_postgres import local_postgres_dsn
+    from seccloud.projection_store import (
+        PROJECTED_DETECTIONS_TABLE,
+        _tbl,
+        default_projection_dsn,
+        ensure_projection_schema,
+    )
+
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError:
+        return
+
+    dsn = default_projection_dsn()
+    try:
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            ensure_projection_schema(conn)
+            pd = _tbl(PROJECTED_DETECTIONS_TABLE)
+            with conn.cursor() as cur:
+                for det in detections:
+                    # Use the earliest evidence timestamp as observed_at
+                    observed_at = None
+                    for ev in det.get("evidence", []):
+                        ts = ev.get("observed_at")
+                        if ts and (observed_at is None or ts < observed_at):
+                            observed_at = ts
+                    if observed_at is None:
+                        observed_at = "2026-01-01T00:00:00Z"
+                    cur.execute(
+                        psycopg.sql.SQL("""
+                        insert into {pd} (
+                          tenant_id, detection_id, observed_at, payload
+                        ) values (
+                          %(tenant_id)s, %(detection_id)s, %(observed_at)s, %(payload)s::jsonb
+                        )
+                        on conflict (detection_id) do update set
+                          tenant_id = excluded.tenant_id,
+                          observed_at = excluded.observed_at,
+                          payload = excluded.payload
+                        """).format(pd=pd),
+                        {
+                            "tenant_id": workspace.tenant_id,
+                            "detection_id": det["detection_id"],
+                            "observed_at": observed_at,
+                            "payload": json.dumps(det),
+                        },
+                    )
+            conn.commit()
+    except Exception:
+        pass  # Non-fatal — full projection sync will catch up
 
 
 def build_derived_state_and_detections(workspace: Workspace) -> dict[str, Any]:

@@ -1654,12 +1654,6 @@ function StreamOverlay({
       <div className="stream-overlay__actions">
         <button
           disabled={busy}
-          onClick={() => performAction("/api/stream/reset")}
-        >
-          Restart stream
-        </button>
-        <button
-          disabled={busy}
           onClick={() => performAction("/api/stream/advance?batch_size=5000")}
         >
           Advance 5K
