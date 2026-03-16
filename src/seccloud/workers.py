@@ -324,6 +324,7 @@ def run_worker_service_once(
     workspace: Workspace,
     dsn: str | None = None,
     max_batches: int | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     workspace.bootstrap()
     pending_batch_count = len(workspace.list_pending_intake_batches())
@@ -346,12 +347,29 @@ def run_worker_service_once(
     if pending_batch_count == 0:
         result: dict[str, Any] = {}
         if source_stats_requested:
+            if verbose:
+                print("  source stats: refreshing...")
             result["source_stats"] = run_source_stats_projector(workspace)
         if projection_requested:
+            if verbose:
+                print("  projection: syncing...")
             result["projection"] = run_projector_worker(workspace, dsn)
+            if verbose:
+                p = result["projection"]
+                print(f"  projection: {p.get('event_count', 0)} events, {p.get('detection_count', 0)} detections")
         status = "projected" if projection_requested else "materialized"
     else:
+        if verbose:
+            print(f"  processing {pending_batch_count} intake batches...")
         result = run_all_local_workers(workspace, dsn=dsn, max_batches=max_batches)
+        norm = result.get("normalization", {})
+        detect = result.get("detect", {})
+        if verbose:
+            landed = norm.get("landed_record_count", 0)
+            ingested = norm.get("ingest", {}).get("added_normalized_events", 0)
+            new_det = detect.get("new_detection_count", 0)
+            total_det = detect.get("total_detection_count", 0)
+            print(f"  normalized {ingested} events ({landed} landed), detections: {new_det} new ({total_det} total)")
         status = "processed"
     worker_state = workspace.load_worker_state()
     worker_state["last_service_at"] = _now_timestamp()
@@ -378,10 +396,12 @@ def run_worker_service_loop(
     idle_iterations = 0
 
     while max_iterations is None or iterations < max_iterations:
-        result = run_worker_service_once(workspace, dsn=dsn, max_batches=max_batches)
+        result = run_worker_service_once(workspace, dsn=dsn, max_batches=max_batches, verbose=True)
         iterations += 1
         if result["status"] == "processed":
             processed_iterations += 1
+        elif result["status"] != "idle":
+            pass  # projected/materialized
         else:
             idle_iterations += 1
         if exit_when_idle and result["status"] == "idle":
