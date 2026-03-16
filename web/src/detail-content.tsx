@@ -83,7 +83,10 @@ export function DetectionDetailContent({
             </span>
             <h3>{detail.detection.title}</h3>
             <p className="detail-subtle">{detail.detection.scenario}</p>
-            <span className="badge badge--neutral" style={{ fontSize: "0.7rem", marginTop: "0.25rem" }}>
+            <span
+              className="badge badge--neutral"
+              style={{ fontSize: "0.7rem", marginTop: "0.25rem" }}
+            >
               {detail.detection.model_version}
             </span>
           </div>

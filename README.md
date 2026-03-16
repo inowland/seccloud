@@ -211,14 +211,14 @@ Runtime state is generated locally under `.seccloud/runtime` by default and is g
 
 The ML detection pipeline lives in four modules under `src/seccloud/`:
 
-| Module | Purpose |
-|---|---|
-| `synthetic_scale.py` | WS1: Generates realistic enterprise activity at scale (demo: 200 principals, ~50K events) with 6 injected attack scenarios |
-| `feature_pipeline.py` | WS2: Transforms events into Facade model inputs — weighted accessor sets (action features) and principal context profiles |
-| `contrastive_model.py` | WS3: Two-tower contrastive model in PyTorch — action tower + context tower with pairwise ranking loss |
-| `evaluation.py` | WS4+5: Multi-scale detection (HAC clustering) and evaluation framework with per-scenario ROC AUC metrics |
-| `onnx_export.py` | WS6: ONNX export with numerical equivalence validation and latency benchmarks |
-| `ml_scoring.py` | M0.5: Bridge between the ML pipeline and the Detection contract for UI integration |
+| Module                 | Purpose                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `synthetic_scale.py`   | WS1: Generates realistic enterprise activity at scale (demo: 200 principals, ~50K events) with 6 injected attack scenarios |
+| `feature_pipeline.py`  | WS2: Transforms events into Facade model inputs — weighted accessor sets (action features) and principal context profiles  |
+| `contrastive_model.py` | WS3: Two-tower contrastive model in PyTorch — action tower + context tower with pairwise ranking loss                      |
+| `evaluation.py`        | WS4+5: Multi-scale detection (HAC clustering) and evaluation framework with per-scenario ROC AUC metrics                   |
+| `onnx_export.py`       | WS6: ONNX export with numerical equivalence validation and latency benchmarks                                              |
+| `ml_scoring.py`        | M0.5: Bridge between the ML pipeline and the Detection contract for UI integration                                         |
 
 M0 validation results are in `project/plan/m0-results.md`.
 

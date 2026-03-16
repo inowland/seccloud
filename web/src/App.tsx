@@ -287,23 +287,18 @@ async function fetchDashboardData(
   queueOffset: number,
   eventsOffset: number,
 ): Promise<AppData> {
-  const [
-    overview,
-    detections,
-    events,
-    sourceCapability,
-    streamState,
-  ] = await Promise.all([
-    fetchJson<Overview>("/api/overview"),
-    fetchJson<DetectionList>(
-      buildListUrl("/api/detections", queuePageSize, queueOffset),
-    ),
-    fetchJson<EventList>(
-      buildListUrl("/api/events", eventsPageSize, eventsOffset),
-    ),
-    fetchJson<SourceCapabilityMatrix>("/api/source-capability"),
-    fetchJson<StreamState>("/api/stream/state"),
-  ]);
+  const [overview, detections, events, sourceCapability, streamState] =
+    await Promise.all([
+      fetchJson<Overview>("/api/overview"),
+      fetchJson<DetectionList>(
+        buildListUrl("/api/detections", queuePageSize, queueOffset),
+      ),
+      fetchJson<EventList>(
+        buildListUrl("/api/events", eventsPageSize, eventsOffset),
+      ),
+      fetchJson<SourceCapabilityMatrix>("/api/source-capability"),
+      fetchJson<StreamState>("/api/stream/state"),
+    ]);
 
   return {
     overview,
@@ -1614,7 +1609,8 @@ function StreamOverlay({
       <div className="stream-overlay__stats">
         <div className="stream-overlay__stat">
           <span className="stream-overlay__stat-value">
-            {formatNumber(streamState.cursor ?? 0)}/{formatNumber(streamState.total_source_events ?? 0)}
+            {formatNumber(streamState.cursor ?? 0)}/
+            {formatNumber(streamState.total_source_events ?? 0)}
           </span>
           <span className="stream-overlay__stat-label">released</span>
         </div>
