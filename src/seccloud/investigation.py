@@ -160,14 +160,24 @@ def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | No
             "peer_group_principal_count": 0,
             "detection_reasons": detection["reasons"],
         }
-    derived_state = workspace.load_derived_state()
+
+    principal_id = anchor_event["principal"]["id"]
     peer_group = anchor_event["principal"]["department"]
-    peer_state = derived_state.get("peer_groups", {}).get(peer_group, {})
-    profile = derived_state.get("principal_profiles", {}).get(anchor_event["principal"]["id"], {})
     resource_id = anchor_event["resource"]["id"]
+
+    # Try to get live counts from postgres
+    if dsn is not None:
+        counts = _peer_counts_from_postgres(dsn, workspace.tenant_id, principal_id, peer_group, resource_id)
+        if counts is not None:
+            return {**counts, "detection_reasons": detection["reasons"]}
+
+    # Fall back to derived state (heuristic path / tests)
+    derived_state = workspace.load_derived_state()
+    peer_state = derived_state.get("peer_groups", {}).get(peer_group, {})
+    profile = derived_state.get("principal_profiles", {}).get(principal_id, {})
     peer_resource_count = peer_state.get("resource_counts", {}).get(resource_id, 0)
     return {
-        "principal_id": anchor_event["principal"]["id"],
+        "principal_id": principal_id,
         "peer_group": peer_group,
         "resource_id": resource_id,
         "principal_total_events": profile.get("total_events", 0),
@@ -176,6 +186,51 @@ def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | No
         "peer_group_principal_count": len(peer_state.get("principal_ids", [])),
         "detection_reasons": detection["reasons"],
     }
+
+
+def _peer_counts_from_postgres(
+    dsn: str, tenant_id: str, principal_id: str, peer_group: str, resource_id: str,
+) -> dict[str, Any] | None:
+    """Query hot_event_index for live peer comparison counts."""
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+        from seccloud.projection_store import HOT_EVENT_INDEX_TABLE, _tbl
+
+        hei = _tbl(HOT_EVENT_INDEX_TABLE)
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(psycopg.sql.SQL(
+                    "select count(*) as n from {hei} where tenant_id = %s and principal_id = %s"
+                ).format(hei=hei), (tenant_id, principal_id))
+                total_events = cur.fetchone()["n"]
+
+                cur.execute(psycopg.sql.SQL(
+                    "select count(*) as n from {hei} where tenant_id = %s and principal_id = %s and resource_id = %s"
+                ).format(hei=hei), (tenant_id, principal_id, resource_id))
+                prior_access = cur.fetchone()["n"]
+
+                cur.execute(psycopg.sql.SQL(
+                    "select count(*) as n from {hei} where tenant_id = %s and principal_department = %s and resource_id = %s"
+                ).format(hei=hei), (tenant_id, peer_group, resource_id))
+                peer_access = cur.fetchone()["n"]
+
+                cur.execute(psycopg.sql.SQL(
+                    "select count(distinct principal_id) as n from {hei} where tenant_id = %s and principal_department = %s"
+                ).format(hei=hei), (tenant_id, peer_group))
+                peer_count = cur.fetchone()["n"]
+
+        return {
+            "principal_id": principal_id,
+            "peer_group": peer_group,
+            "resource_id": resource_id,
+            "principal_total_events": total_events,
+            "principal_prior_resource_access_count": prior_access,
+            "peer_group_resource_access_count": peer_access,
+            "peer_group_principal_count": peer_count,
+        }
+    except Exception:
+        return None
 
 
 def get_detection_detail(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:

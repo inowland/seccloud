@@ -93,7 +93,23 @@ def _normalized_event_count(workspace: Workspace) -> int:
 
 
 def _active_detection_count(workspace: Workspace) -> int:
-    return sum(1 for detection in workspace.list_detections() if detection.get("status", "open") == "open")
+    try:
+        from seccloud.projection_store import (
+            PROJECTED_DETECTIONS_TABLE, _tbl, default_projection_dsn,
+        )
+        import psycopg
+        from psycopg.rows import dict_row
+        dsn = default_projection_dsn()
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                pd = _tbl(PROJECTED_DETECTIONS_TABLE)
+                cur.execute(psycopg.sql.SQL(
+                    "select count(*) as n from {pd} where tenant_id = %s "
+                    "and coalesce(payload->>'status', 'open') = 'open'"
+                ).format(pd=pd), (workspace.tenant_id,))
+                return cur.fetchone()["n"]
+    except Exception:
+        return sum(1 for d in workspace.list_detections() if d.get("status", "open") == "open")
 
 
 def _stream_manifest_path(workspace: Workspace):
