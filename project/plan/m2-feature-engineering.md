@@ -20,33 +20,75 @@ as Parquet.
 
 ### Normalization Workers (Rust)
 
+Normalization is a transform chain built on the M1 `seccloud-pipeline` core crate:
+
 ```
 DynamoDB intake-queue ──► Worker claims batch
                               │
-                              ├── Read raw Parquet from S3
-                              ├── Schema mapping (vendor → unified)
-                              ├── Entity resolution (principal/resource keying)
-                              ├── Write normalized Parquet to S3
-                              └── Update DynamoDB (mark complete, write manifest)
+                              ReadRawParquet
+                              │
+                              Validate ──► (on failure) ──► DeadLetterSink
+                              │
+                              NormalizeSchema (source mapping config)
+                              │
+                              ResolveEntities (principal/resource keying)
+                              │
+                              WriteNormalizedParquet (S3)
+                              │
+                              UpdateManifest (DynamoDB)
 ```
 
 - Workers run as EKS Deployments with configurable replica count
 - Work claiming via DynamoDB conditional writes (optimistic locking)
-- Schema mapping registry: declarative mapping from vendor schemas to unified schema
-- Dead-letter output for events that fail normalization
+- Each stage is an independent `Transform` implementation — testable in isolation
+  and reorderable without changing adjacent stages
+- Dead-letter routing uses the same pipeline (validation failures produce an envelope
+  with `metadata.dead_letter_reason`, routed to a dead-letter sink transform)
+
+### Declarative Source Mapping Registry
+
+Per-source normalization logic lives in config files, not Rust code:
+
+```
+sources/
+  okta.toml         # field mappings, action taxonomy, required fields, sensitivity rules
+  gworkspace.toml
+  github.toml
+  snowflake.toml
+```
+
+Each mapping config declares:
+
+- Field mapping: vendor field names → unified schema fields
+- Action taxonomy: (source, event_type) → (verb, category)
+- Required fields: which vendor fields must be present (else dead-letter)
+- Entity keying rules: how to derive principal_key and resource_key
+- Source-specific enrichment: e.g., Okta geo fields, GitHub bytes_transferred
+
+The `NormalizeSchema` transform reads the registry at startup. Adding a new source
+(M6 agent monitoring, future integrations) is "write a TOML config + test fixtures,"
+not "modify the normalization worker."
 
 ### Feature Engineering Workers (Rust)
+
+Feature engineering is also a transform chain, composable with normalization (fused
+in one pod or split across separate pools with a queue in between — same code either
+way):
 
 ```
 Normalized events in S3 ──► Feature worker reads time windows
                                  │
-                                 ├── Principal profile (action counts, resource diversity,
+                                 ComputePrincipalProfile (action counts, resource diversity,
                                  │   time-of-day distribution, geo history)
-                                 ├── Peer group aggregates (same role/team/org-unit)
-                                 ├── Resource access patterns (who else accesses this,
+                                 │
+                                 ComputePeerAggregates (same role/team/org-unit)
+                                 │
+                                 ComputeResourcePatterns (who else accesses this,
                                  │   sensitivity signals)
-                                 ├── Temporal features (velocity, acceleration, periodicity)
-                                 └── Write feature vectors as Parquet to S3
+                                 │
+                                 ComputeTemporalFeatures (velocity, acceleration, periodicity)
+                                 │
+                                 WriteFeatureParquet (S3)
 ```
 
 - Feature computation is windowed: each feature vector covers a configurable time
@@ -54,6 +96,8 @@ Normalized events in S3 ──► Feature worker reads time windows
 - Principal profiles are maintained as rolling aggregates in DynamoDB (hot) backed by
   full history in S3 (cold)
 - Peer group definitions come from identity source data (Okta groups, org chart)
+- Each feature computation stage is an independent transform — can be tested against
+  fixture data without running the full pipeline
 
 ### S3 Layout (additions to v1)
 
@@ -103,6 +147,14 @@ Output of feature engineering, input to ML:
   profile state is eventually consistent.
 - **Arrow-native processing**: use arrow-rs and datafusion for all Parquet I/O and
   columnar computation. No row-by-row processing.
+- **Declarative source mappings**: per-source normalization logic is config, not code.
+  This keeps the normalization worker generic and makes adding sources a config change.
+  The trade-off is a small runtime config-parsing cost at startup, which is negligible
+  compared to the Parquet I/O.
+- **Data-driven transform tests**: each source has a fixtures directory with
+  input/expected-output JSON pairs. The test harness validates every fixture
+  automatically. This catches field-mapping regressions without writing new test
+  code per source.
 
 ## Dependencies
 
@@ -111,9 +163,13 @@ Output of feature engineering, input to ML:
 
 ## Deliverables
 
-1. Rust normalization worker with schema mapping for 4 sources.
-2. Rust feature engineering worker producing ML-ready feature vectors.
-3. Unified event schema v1 specification.
-4. Feature vector schema v1 specification.
-5. DynamoDB principal profile table design.
-6. Integration tests validating end-to-end raw → features pipeline.
+1. Rust normalization worker as a transform chain, with schema mapping for 4 sources.
+2. Declarative source mapping configs (TOML) for Okta, Google Workspace, GitHub,
+   Snowflake.
+3. Data-driven fixture test harness with input/expected-output pairs per source.
+4. Rust feature engineering worker as a transform chain, producing ML-ready feature
+   vectors.
+5. Unified event schema v1 specification.
+6. Feature vector schema v1 specification.
+7. DynamoDB principal profile table design.
+8. Integration tests validating end-to-end raw → features pipeline.

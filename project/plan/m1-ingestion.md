@@ -18,22 +18,68 @@ the system will build on.
 
 ## Architecture
 
+### Core Pipeline Crate (`seccloud-pipeline`)
+
+All data plane services (ingestion, normalization, scoring) share a core crate that
+defines the composable pipeline primitives. Every processing stage has the same shape:
+
+```rust
+/// Every stage — validation, normalization, routing, sinking — is a Transform.
+trait Transform: Send + Sync {
+    fn apply(&self, ctx: &Context, msg: Envelope) -> Result<Vec<Envelope>>;
+}
+
+/// Payload stays immutable after ingestion; metadata accumulates processing state.
+struct Envelope {
+    payload: Bytes,
+    metadata: EventMetadata,         // batch_id, source, intake_ts, attempt_count, lineage
+    control: Option<ControlSignal>,  // pipeline flow control
+}
+
+enum ControlSignal { Flush, BatchComplete, Shutdown }
+```
+
+Key design properties (inspired by Substation):
+
+- **Fan-out**: a transform returns `Vec<Envelope>` — it can produce 0 (drop/filter),
+  1 (map), or N (split) messages.
+- **Data/metadata separation**: the raw event payload is immutable after ingestion.
+  Processing state (dead-letter reason, retry count, lineage pointers) accumulates in
+  metadata without polluting the event.
+- **Control messages**: `Flush`, `BatchComplete`, and `Shutdown` signals flow through
+  the same channel as data. This gives clean batch boundary semantics (for hitting the
+  64-128 MB Parquet target) and graceful drain (for zero-downtime upgrades in M5).
+- **Routing is transformation**: dead-letter handling, S3 writes, and DynamoDB updates
+  are all transforms in the chain, not special-cased branches. This eliminates a class
+  of bugs where the error path diverges from the happy path.
+
 ### Push Gateway (Rust)
+
+The push gateway is a transform chain:
 
 ```
 Client/Webhook ──► ALB ──► Rust HTTP Service (axum/tonic)
                               │
-                              ├── Validate schema
-                              ├── Assign intake batch ID
-                              ├── Buffer in memory (bounded)
-                              ├── Flush to S3 as Parquet on interval or size threshold
-                              └── Write intake manifest to DynamoDB
+                              Authenticate
+                              │
+                              Validate ──► (on failure) ──► DeadLetterSink
+                              │
+                              AssignBatch
+                              │
+                              Buffer (bounded, flushes on size/interval/Flush signal)
+                              │
+                              FlushToS3 (Parquet)
+                              │
+                              WriteIntakeManifest (DynamoDB)
 ```
 
 - Stateless: no local disk, no persistent connections between pods
 - Horizontal scaling via EKS HPA on CPU/memory/request-rate
 - Authentication: bearer token per integration (rotate via DynamoDB)
 - Schema validation: reject malformed payloads before buffering
+- Dead-letter routing: validation failures produce an envelope with
+  `metadata.dead_letter_reason` set, routed to a dead-letter sink transform
+  (same pipeline, not a separate codepath)
 
 ### Pull Collectors (Rust)
 
@@ -72,6 +118,11 @@ s3://{bucket}/{tenant}/v1/manifests/intake/{batch-id}.json
   poll the table. This keeps the cloud-service surface minimal and is portable.
 - **Tenant isolation at the S3 key level**: no shared prefixes between tenants. A
   tenant's data can be deleted by prefix. IAM policies can scope to tenant prefix.
+- **Composable transform pipeline**: the `Transform` trait and `Envelope` type are
+  defined in M1 and used through M2-M6. This is a one-time design cost (~1 week) that
+  pays dividends: M2 normalization, M3 scoring, and M6 multi-cloud sinks all compose
+  over the same abstraction. Control messages reuse the same channel for batch
+  boundaries (M1), graceful drain (M5), and adaptive batching (M6).
 
 ## Dependencies
 
@@ -80,9 +131,11 @@ s3://{bucket}/{tenant}/v1/manifests/intake/{batch-id}.json
 
 ## Deliverables
 
-1. Rust ingestion service (push gateway) deployable on EKS.
-2. Rust collector framework with 4 source implementations.
-3. S3 lake layout v1 specification and Parquet schemas.
-4. DynamoDB table definitions and access patterns.
-5. Terraform module for ingestion tier (EKS, ALB, DynamoDB, S3).
-6. Load test demonstrating 10K eps sustained.
+1. `seccloud-pipeline` core crate: `Transform` trait, `Envelope`, `ControlSignal`,
+   `Chain` executor, and sink/dead-letter primitives.
+2. Rust ingestion service (push gateway) deployable on EKS, built as a transform chain.
+3. Rust collector framework with 4 source implementations.
+4. S3 lake layout v1 specification and Parquet schemas.
+5. DynamoDB table definitions and access patterns.
+6. Terraform module for ingestion tier (EKS, ALB, DynamoDB, S3).
+7. Load test demonstrating 10K eps sustained.

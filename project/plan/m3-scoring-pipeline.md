@@ -45,22 +45,31 @@ S3 feature Parquet ──► Training Job (EKS GPU pod)
 
 ### Scoring Workers (Rust)
 
+Scoring is a transform chain built on the M1 `seccloud-pipeline` core crate:
+
 ```
 Feature vectors (S3) ──► Rust Scoring Worker
                               │
-                              ├── Load ONNX model (cached in memory)
-                              ├── Compute embeddings
-                              ├── Score anomaly (context-fit)
-                              ├── Apply clustering refinement
-                              ├── Write detections to S3
-                              └── Project hot detections to DynamoDB/Postgres
+                              ReadFeatureParquet
+                              │
+                              Score (OnnxScoring or HeuristicScoring)
+                              │
+                              ClusterRefinement
+                              │
+                              WriteDetections (S3)
+                              │
+                              ProjectHotDetections (DynamoDB/Postgres)
 ```
 
 - ONNX Runtime (ort crate) for model inference in Rust
-- Model hot-reloading: poll S3 for new model versions, swap atomically
+- Model hot-reloading: poll S3 for new model versions, swap the `OnnxScoring`
+  transform instance behind an `Arc<RwLock<>>` — the pipeline shape doesn't change
 - Batch scoring: process feature vectors in batches of 256-1024 for throughput
-- Fallback: if no trained model available (cold-start), use heuristic scoring
-  (port of PoC scoring.py logic to Rust)
+- Heuristic/ML swap via composition: the `Score` slot in the chain accepts any
+  `Transform` implementation. During cold-start (no trained model), the pipeline
+  uses `HeuristicScoring` (port of PoC scoring.py). Once a model is available, it
+  swaps to `OnnxScoring`. No branching logic in the worker — just a different
+  transform plugged into the same chain
 
 ### Model Lifecycle
 
@@ -77,6 +86,7 @@ s3://{bucket}/{tenant}/v1/detections/{YYYY}/{MM}/{DD}/{HH}/{partition-id}.parque
 ```
 
 Detection schema:
+
 - `detection_id`: unique identifier
 - `timestamp`: when the anomalous action occurred
 - `principal_key`: who performed the action
@@ -92,8 +102,10 @@ Detection schema:
 
 - **ONNX as the model interchange format**: decouples training (Python) from inference
   (Rust). Well-supported in both ecosystems.
-- **Heuristic fallback**: during cold-start before a trained model is available, the
-  Rust scoring worker runs rule-based heuristics. This ensures day-one value.
+- **Heuristic fallback via transform composition**: during cold-start, the scoring
+  pipeline plugs in `HeuristicScoring` where `OnnxScoring` would go. Both implement
+  the same `Transform` trait from the M1 core crate. No if/else in the worker — the
+  pipeline is assembled at startup based on model availability.
 - **Batch scoring, not streaming**: scoring operates on micro-batches of feature
   vectors, not individual events. This aligns with the S3-backed architecture and
   gives better GPU/CPU utilization.

@@ -23,8 +23,10 @@ GCP and Azure.
 
 - Partition ingestion across multiple pods by source or hash-ring assignment
 - In-memory write-ahead buffer with S3 flush (Warpstream-style)
-- Adaptive batching: larger Parquet files under high throughput, faster flushes under
-  low throughput
+- Adaptive batching: the buffer transform adjusts its `Flush` signal frequency based
+  on envelope throughput — larger Parquet files under high load, faster flushes under
+  low load. This is a localized change to one transform, not a system-wide
+  rearchitecture, thanks to the M1 control message design
 - Consider io_uring for high-throughput network I/O on Linux
 
 ### Storage Tiering
@@ -56,12 +58,15 @@ Delete:         Automated per retention policy
 
 Three abstraction points:
 
-| Capability | AWS | GCP | Azure |
-|---|---|---|---|
-| Object storage | S3 | GCS | Azure Blob |
-| Coordination store | DynamoDB | Bigtable or Firestore | CosmosDB |
-| Compute orchestration | EKS | GKE | AKS |
+| Capability            | AWS      | GCP                   | Azure      |
+| --------------------- | -------- | --------------------- | ---------- |
+| Object storage        | S3       | GCS                   | Azure Blob |
+| Coordination store    | DynamoDB | Bigtable or Firestore | CosmosDB   |
+| Compute orchestration | EKS      | GKE                   | AKS        |
 
+- Cloud-specific sinks (S3, GCS, Azure Blob) are each a `Transform` implementation
+  from the M1 core crate. Swapping clouds means swapping a transform in the pipeline
+  config — pipeline logic and upstream transforms are untouched
 - Rust trait-based abstraction for object store and coordination store
 - Kubernetes manifests are cloud-agnostic (already)
 - Terraform provider modules per cloud, shared module structure
@@ -78,7 +83,9 @@ AI agents as a new principal type with source-specific collectors:
 
 Agent activity shares the same normalized schema (principal + action + resource +
 context) but with agent-specific features: tool call sequences, permission scope
-usage, delegation chains.
+usage, delegation chains. Adding agent sources uses the M2 declarative source
+mapping pattern: write a TOML config + test fixtures, no normalization worker
+changes required.
 
 ## Key Decisions
 

@@ -57,11 +57,13 @@ and upgrades should be zero-downtime.
 ### What Crosses the Boundary
 
 Control plane → data plane:
+
 - Container image references (ECR in our account, cross-account pull)
 - Configuration updates (feature flags, model versions, schema versions)
 - Deployment commands (kubectl apply via assumed role)
 
 Data plane → control plane:
+
 - Health metrics (pod status, queue depth, error rates)
 - Deployment status (current versions, rollout state)
 - Aggregate statistics (event volume, detection count — no PII)
@@ -85,7 +87,12 @@ detection details, user identities, or any data that could identify individuals.
 
 1. Build and push new container images to ECR
 2. Update Kubernetes manifests in customer deployment (via control plane)
-3. Rolling deployment: new pods come up, old pods drain
+3. Rolling deployment: new pods come up, old pods drain using the control message
+   protocol from the M1 core crate:
+   - `Shutdown` signal injected into the pipeline — stops accepting new events
+   - `Flush` signal drains in-memory buffers to S3
+   - `BatchComplete` confirms the last batch is written and manifested
+   - Pod reports ready-to-terminate via readiness probe
 4. Health check gates: new pods must pass readiness checks before old pods terminate
 5. Rollback: revert to previous manifest if health checks fail
 
@@ -95,7 +102,9 @@ detection details, user identities, or any data that could identify individuals.
 - S3 throttling: exponential backoff with jitter (built into Rust workers)
 - DynamoDB capacity: on-demand capacity mode (no provisioned throughput to manage)
 - Stale work: DynamoDB TTL on work queue items, workers re-claim stale items
-- State recovery: any hot store can be rebuilt from S3 source of truth
+- State recovery: any hot store can be rebuilt from S3 source of truth. Envelope
+  metadata (batch_id, lineage pointers) provides the checkpoint state needed to
+  resume interrupted pipeline stages without re-processing
 
 ## Key Decisions
 
