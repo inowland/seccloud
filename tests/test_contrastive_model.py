@@ -18,7 +18,6 @@ from seccloud.contrastive_model import (
     FacadeDataset,
     FacadeModel,
     ModelConfig,
-    TrainingSample,
     _pad_weighted_set,
     build_categorical_vocabs,
     build_training_pairs,
@@ -29,7 +28,6 @@ from seccloud.contrastive_model import (
     tensorize_action,
     tensorize_context,
     train,
-    train_epoch,
     weighted_sum_pool,
 )
 from seccloud.feature_pipeline import (
@@ -42,7 +40,6 @@ from seccloud.feature_pipeline import (
     StaticFeatures,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -52,15 +49,18 @@ def _small_feature_set() -> FeatureSet:
     """Create a minimal FeatureSet for testing."""
     actions = {
         "doc-a": ActionFeatures(
-            resource_id="doc-a", source="gworkspace",
+            resource_id="doc-a",
+            source="gworkspace",
             accessor_weights={0: 0.6, 1: 0.4},
         ),
         "doc-b": ActionFeatures(
-            resource_id="doc-b", source="gworkspace",
+            resource_id="doc-b",
+            source="gworkspace",
             accessor_weights={1: 0.5, 2: 0.5},
         ),
         "repo-x": ActionFeatures(
-            resource_id="repo-x", source="github",
+            resource_id="repo-x",
+            source="github",
             accessor_weights={0: 1.0},
         ),
     }
@@ -87,8 +87,10 @@ def _small_feature_set() -> FeatureSet:
                 co_access={j: 0.3 for j in range(5) if j != idx},
             ),
             static=StaticFeatures(
-                role=role, employment_duration_bucket="1-3yr",
-                location=loc, privilege_level="regular",
+                role=role,
+                employment_duration_bucket="1-3yr",
+                location=loc,
+                privilege_level="regular",
             ),
         )
 
@@ -101,8 +103,10 @@ def _small_feature_set() -> FeatureSet:
     }
     resource_vocab = {"doc-a": 0, "doc-b": 1, "repo-x": 2}
     return FeatureSet(
-        actions=actions, contexts=contexts,
-        principal_vocab_size=5, resource_vocab=resource_vocab,
+        actions=actions,
+        contexts=contexts,
+        principal_vocab_size=5,
+        resource_vocab=resource_vocab,
     )
 
 
@@ -110,9 +114,14 @@ def _small_config(fs: FeatureSet) -> ModelConfig:
     """Small config suitable for quick tests."""
     return config_from_features(
         fs,
-        embed_dim=16, token_dim=8, static_embed_dim=4,
-        action_hidden=[32], context_hidden=[32],
-        n_positive=2, batch_size=4, epochs=2,
+        embed_dim=16,
+        token_dim=8,
+        static_embed_dim=4,
+        action_hidden=[32],
+        context_hidden=[32],
+        n_positive=2,
+        batch_size=4,
+        epochs=2,
         sources=["gworkspace", "github"],
     )
 
@@ -184,8 +193,7 @@ class TestTensorizeContext(unittest.TestCase):
         fs = _small_feature_set()
         vocabs = build_categorical_vocabs(fs)
         ctx = fs.contexts[0]
-        t = tensorize_context(ctx, fs.resource_vocab, vocabs,
-                              max_windows=4, max_res=3, max_peers=6)
+        t = tensorize_context(ctx, fs.resource_vocab, vocabs, max_windows=4, max_res=3, max_peers=6)
         self.assertEqual(t["hist_window_indices"].shape, (4, 3))
         self.assertEqual(t["hist_window_mask"].shape, (4, 3))
         self.assertEqual(t["hist_num_windows"].item(), 2)
@@ -196,7 +204,9 @@ class TestTensorizeContext(unittest.TestCase):
 class TestActionTower(unittest.TestCase):
     def test_output_shape_and_norm(self):
         cfg = ModelConfig(
-            principal_vocab_size=10, embed_dim=16, token_dim=8,
+            principal_vocab_size=10,
+            embed_dim=16,
+            token_dim=8,
             action_hidden=[32],
         )
         tower = ActionTower(cfg)
@@ -212,11 +222,16 @@ class TestActionTower(unittest.TestCase):
 class TestContextTower(unittest.TestCase):
     def test_output_shape_and_norm(self):
         cfg = ModelConfig(
-            principal_vocab_size=10, resource_vocab_size=20,
-            embed_dim=16, token_dim=8, static_embed_dim=4,
+            principal_vocab_size=10,
+            resource_vocab_size=20,
+            embed_dim=16,
+            token_dim=8,
+            static_embed_dim=4,
             context_hidden=[32],
-            num_roles=4, num_locations=3,
-            num_duration_buckets=5, num_privilege_levels=3,
+            num_roles=4,
+            num_locations=3,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
         )
         tower = ContextTower(cfg)
         ctx = {
@@ -240,11 +255,17 @@ class TestContextTower(unittest.TestCase):
 class TestFacadeModel(unittest.TestCase):
     def test_score_shape(self):
         cfg = ModelConfig(
-            principal_vocab_size=10, resource_vocab_size=20,
-            embed_dim=16, token_dim=8, static_embed_dim=4,
-            action_hidden=[32], context_hidden=[32],
-            num_roles=4, num_locations=3,
-            num_duration_buckets=5, num_privilege_levels=3,
+            principal_vocab_size=10,
+            resource_vocab_size=20,
+            embed_dim=16,
+            token_dim=8,
+            static_embed_dim=4,
+            action_hidden=[32],
+            context_hidden=[32],
+            num_roles=4,
+            num_locations=3,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
             sources=["gworkspace"],
         )
         model = FacadeModel(cfg)
@@ -271,11 +292,17 @@ class TestFacadeModel(unittest.TestCase):
 
     def test_gradient_flow(self):
         cfg = ModelConfig(
-            principal_vocab_size=5, resource_vocab_size=5,
-            embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
-            num_roles=2, num_locations=2,
-            num_duration_buckets=5, num_privilege_levels=3,
+            principal_vocab_size=5,
+            resource_vocab_size=5,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
+            num_roles=2,
+            num_locations=2,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
             sources=["gworkspace"],
         )
         model = FacadeModel(cfg)
@@ -305,7 +332,7 @@ class TestFacadeModel(unittest.TestCase):
 class TestHuberLikeLoss(unittest.TestCase):
     def test_quadratic_near_zero(self):
         x = torch.tensor([0.5])
-        expected = 0.5 * 0.5 ** 2
+        expected = 0.5 * 0.5**2
         self.assertAlmostEqual(huber_like_loss(x).item(), expected, places=5)
 
     def test_linear_far_from_zero(self):
@@ -316,13 +343,15 @@ class TestHuberLikeLoss(unittest.TestCase):
     def test_symmetric(self):
         x = torch.tensor([-1.5])
         self.assertAlmostEqual(
-            huber_like_loss(x).item(), huber_like_loss(-x).item(), places=5,
+            huber_like_loss(x).item(),
+            huber_like_loss(-x).item(),
+            places=5,
         )
 
 
 class TestPairwiseRankingLoss(unittest.TestCase):
     def test_zero_when_synthetic_far(self):
-        nat = torch.tensor([0.1, 0.2])         # low (close embeddings)
+        nat = torch.tensor([0.1, 0.2])  # low (close embeddings)
         syn = torch.tensor([[1.5, 1.8], [1.6, 1.7]])  # high (far embeddings)
         loss = pairwise_ranking_loss(nat, syn, h=0.1, s=1.0, omega=2.0)
         # synthetic >> natural -> margin negative -> relu zeros it -> loss ≈ 0
@@ -368,7 +397,11 @@ class TestFacadeDataset(unittest.TestCase):
         self.vocabs = build_categorical_vocabs(self.fs)
         self.pairs = build_training_pairs(self.fs)
         self.ds = FacadeDataset(
-            self.fs, self.pairs, self.vocabs, self.cfg, rng_seed=99,
+            self.fs,
+            self.pairs,
+            self.vocabs,
+            self.cfg,
+            rng_seed=99,
         )
 
     def test_length(self):
@@ -412,8 +445,12 @@ class TestTrainEndToEnd(unittest.TestCase):
         vocabs = build_categorical_vocabs(fs)
         model = FacadeModel(cfg)
         losses = train(
-            model, fs, vocabs, cfg,
-            device=torch.device("cpu"), seed=42,
+            model,
+            fs,
+            vocabs,
+            cfg,
+            device=torch.device("cpu"),
+            seed=42,
         )
         self.assertEqual(len(losses), cfg.epochs)
         for loss in losses:
@@ -427,11 +464,11 @@ class TestTrainEndToEnd(unittest.TestCase):
         from seccloud.feature_pipeline import build_features
         from seccloud.synthetic_scale import (
             ScaleConfig,
+            _generate_day_events,
             build_app_affinities,
             build_principal_affinities,
             generate_org,
             generate_resources,
-            _generate_day_events,
         )
 
         scale_cfg = ScaleConfig(num_principals=20, num_days=3, seed=7)
@@ -439,7 +476,11 @@ class TestTrainEndToEnd(unittest.TestCase):
         principals, teams = generate_org(scale_cfg, rng)
         resources = generate_resources(scale_cfg, teams, rng)
         affinities = build_principal_affinities(
-            scale_cfg, principals, teams, resources, rng,
+            scale_cfg,
+            principals,
+            teams,
+            resources,
+            rng,
         )
         app_affinities = build_app_affinities(principals, rng)
 
@@ -449,8 +490,13 @@ class TestTrainEndToEnd(unittest.TestCase):
             day = scale_cfg.start_date + timedelta(days=d)
             events.extend(
                 _generate_day_events(
-                    day, principals, affinities, app_affinities,
-                    scale_cfg, rng, counter,
+                    day,
+                    principals,
+                    affinities,
+                    app_affinities,
+                    scale_cfg,
+                    rng,
+                    counter,
                 )
             )
         events.sort(key=lambda e: e["observed_at"])
@@ -458,9 +504,14 @@ class TestTrainEndToEnd(unittest.TestCase):
         fs = build_features(events, principals, teams)
         cfg = config_from_features(
             fs,
-            embed_dim=16, token_dim=8, static_embed_dim=4,
-            action_hidden=[32], context_hidden=[32],
-            n_positive=3, batch_size=32, epochs=2,
+            embed_dim=16,
+            token_dim=8,
+            static_embed_dim=4,
+            action_hidden=[32],
+            context_hidden=[32],
+            n_positive=3,
+            batch_size=32,
+            epochs=2,
         )
         vocabs = build_categorical_vocabs(fs)
         model = FacadeModel(cfg)
@@ -469,7 +520,7 @@ class TestTrainEndToEnd(unittest.TestCase):
         for loss in losses:
             self.assertFalse(
                 torch.isnan(torch.tensor(loss)),
-                f"NaN loss at epoch",
+                "NaN loss at epoch",
             )
 
 
@@ -511,8 +562,8 @@ class TestPadWeightedSet(unittest.TestCase):
         wts = {0: 0.5, 3: 0.5}
         indices, _w, _m = _pad_weighted_set(wts, max_len=4, offset=1)
         real_indices = indices[:2]
-        self.assertIn(1, real_indices)   # 0 + 1
-        self.assertIn(4, real_indices)   # 3 + 1
+        self.assertIn(1, real_indices)  # 0 + 1
+        self.assertIn(4, real_indices)  # 3 + 1
 
 
 class TestTensorizeActionValues(unittest.TestCase):
@@ -549,16 +600,17 @@ class TestTensorizeContextValues(unittest.TestCase):
         """Known resources map to correct offset indices."""
         ctx = ContextFeatures(
             principal_idx=0,
-            history=[HistoryWindow(
-                window_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
-                resource_ids=frozenset({"doc-a"}),
-            )],
+            history=[
+                HistoryWindow(
+                    window_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+                    resource_ids=frozenset({"doc-a"}),
+                )
+            ],
             peers=PeerFeatures({}, {}, {}),
             collaboration=CollaborationFeatures({}),
             static=StaticFeatures("engineer", "1-3yr", "US-NY", "regular"),
         )
-        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs,
-                              max_windows=2, max_res=3, max_peers=2)
+        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs, max_windows=2, max_res=3, max_peers=2)
         # "doc-a" has vocab index 0, offset +1 = 1
         win0 = t["hist_window_indices"][0]
         self.assertEqual(win0[0].item(), 1)
@@ -568,16 +620,17 @@ class TestTensorizeContextValues(unittest.TestCase):
         """Unknown resources get vocab index 0, offset +1 = 1."""
         ctx = ContextFeatures(
             principal_idx=0,
-            history=[HistoryWindow(
-                window_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
-                resource_ids=frozenset({"unknown-resource"}),
-            )],
+            history=[
+                HistoryWindow(
+                    window_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+                    resource_ids=frozenset({"unknown-resource"}),
+                )
+            ],
             peers=PeerFeatures({}, {}, {}),
             collaboration=CollaborationFeatures({}),
             static=StaticFeatures("engineer", "1-3yr", "US-NY", "regular"),
         )
-        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs,
-                              max_windows=2, max_res=2, max_peers=2)
+        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs, max_windows=2, max_res=2, max_peers=2)
         self.assertEqual(t["hist_window_indices"][0, 0].item(), 1)  # 0 + 1
 
     def test_peer_group_ordering(self):
@@ -593,8 +646,7 @@ class TestTensorizeContextValues(unittest.TestCase):
             collaboration=CollaborationFeatures(co_access={4: 0.4}),
             static=StaticFeatures("engineer", "1-3yr", "US-NY", "regular"),
         )
-        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs,
-                              max_windows=1, max_res=1, max_peers=3)
+        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs, max_windows=1, max_res=1, max_peers=3)
         # Group 0 (department): principal 1 -> offset index 2
         self.assertEqual(t["peer_indices"][0, 0].item(), 2)
         self.assertAlmostEqual(t["peer_weights"][0, 0].item(), 1.0)
@@ -610,17 +662,17 @@ class TestTensorizeContextValues(unittest.TestCase):
 
     def test_static_categorical_mapping(self):
         ctx = ContextFeatures(
-            principal_idx=0, history=[],
+            principal_idx=0,
+            history=[],
             peers=PeerFeatures({}, {}, {}),
             collaboration=CollaborationFeatures({}),
             static=StaticFeatures("analyst", "3-5yr", "US-SF", "elevated"),
         )
-        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs,
-                              max_windows=1, max_res=1, max_peers=1)
-        self.assertEqual(t["role"].item(), 0)       # "analyst" -> 0
-        self.assertEqual(t["location"].item(), 1)   # "US-SF" -> 1
-        self.assertEqual(t["duration"].item(), 3)    # "3-5yr" -> 3
-        self.assertEqual(t["privilege"].item(), 1)   # "elevated" -> 1
+        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs, max_windows=1, max_res=1, max_peers=1)
+        self.assertEqual(t["role"].item(), 0)  # "analyst" -> 0
+        self.assertEqual(t["location"].item(), 1)  # "US-SF" -> 1
+        self.assertEqual(t["duration"].item(), 3)  # "3-5yr" -> 3
+        self.assertEqual(t["privilege"].item(), 1)  # "elevated" -> 1
 
     def test_hist_num_windows_matches_real_windows(self):
         ctx = ContextFeatures(
@@ -634,8 +686,7 @@ class TestTensorizeContextValues(unittest.TestCase):
             collaboration=CollaborationFeatures({}),
             static=StaticFeatures("engineer", "1-3yr", "US-NY", "regular"),
         )
-        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs,
-                              max_windows=5, max_res=2, max_peers=1)
+        t = tensorize_context(ctx, self.resource_vocab, self.cat_vocabs, max_windows=5, max_res=2, max_peers=1)
         self.assertEqual(t["hist_num_windows"].item(), 3)
         # Windows 3 and 4 should be all padding
         self.assertFalse(t["hist_window_mask"][3].any())
@@ -647,7 +698,8 @@ class TestEdgeCaseEmptyHistory(unittest.TestCase):
 
     def _ctx_no_history(self) -> ContextFeatures:
         return ContextFeatures(
-            principal_idx=0, history=[],
+            principal_idx=0,
+            history=[],
             peers=PeerFeatures(department_peers={1: 1.0}, manager_peers={}, group_peers={}),
             collaboration=CollaborationFeatures({}),
             static=StaticFeatures("engineer", "1-3yr", "US-NY", "regular"),
@@ -656,22 +708,27 @@ class TestEdgeCaseEmptyHistory(unittest.TestCase):
     def test_tensorize_zero_windows(self):
         ctx = self._ctx_no_history()
         vocabs = {
-            "role": {"engineer": 0}, "location": {"US-NY": 0},
+            "role": {"engineer": 0},
+            "location": {"US-NY": 0},
             "duration_bucket": {"<3mo": 0, "3-12mo": 1, "1-3yr": 2, "3-5yr": 3, "5yr+": 4},
             "privilege_level": {"regular": 0, "elevated": 1, "admin": 2},
         }
-        t = tensorize_context(ctx, {"doc-a": 0}, vocabs,
-                              max_windows=3, max_res=2, max_peers=2)
+        t = tensorize_context(ctx, {"doc-a": 0}, vocabs, max_windows=3, max_res=2, max_peers=2)
         self.assertEqual(t["hist_num_windows"].item(), 0)
         self.assertFalse(t["hist_window_mask"].any())
 
     def test_context_tower_with_zero_windows(self):
         cfg = ModelConfig(
-            principal_vocab_size=5, resource_vocab_size=5,
-            embed_dim=8, token_dim=4, static_embed_dim=4,
+            principal_vocab_size=5,
+            resource_vocab_size=5,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
             context_hidden=[16],
-            num_roles=2, num_locations=2,
-            num_duration_buckets=5, num_privilege_levels=3,
+            num_roles=2,
+            num_locations=2,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
         )
         tower = ContextTower(cfg)
         ctx = {
@@ -681,8 +738,10 @@ class TestEdgeCaseEmptyHistory(unittest.TestCase):
             "peer_indices": torch.tensor([[[1, 0], [0, 0], [0, 0], [0, 0]]]),
             "peer_weights": torch.tensor([[[1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]]),
             "peer_mask": torch.tensor([[[True, False], [False, False], [False, False], [False, False]]]),
-            "role": torch.tensor([0]), "location": torch.tensor([0]),
-            "duration": torch.tensor([0]), "privilege": torch.tensor([0]),
+            "role": torch.tensor([0]),
+            "location": torch.tensor([0]),
+            "duration": torch.tensor([0]),
+            "privilege": torch.tensor([0]),
         }
         out = tower(ctx)
         self.assertEqual(out.shape, (1, 8))
@@ -693,11 +752,16 @@ class TestEdgeCaseEmptyHistory(unittest.TestCase):
 class TestEdgeCaseEmptyPeers(unittest.TestCase):
     def test_all_peer_groups_empty(self):
         cfg = ModelConfig(
-            principal_vocab_size=5, resource_vocab_size=5,
-            embed_dim=8, token_dim=4, static_embed_dim=4,
+            principal_vocab_size=5,
+            resource_vocab_size=5,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
             context_hidden=[16],
-            num_roles=2, num_locations=2,
-            num_duration_buckets=5, num_privilege_levels=3,
+            num_roles=2,
+            num_locations=2,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
         )
         tower = ContextTower(cfg)
         ctx = {
@@ -708,8 +772,10 @@ class TestEdgeCaseEmptyPeers(unittest.TestCase):
             "peer_indices": torch.zeros(1, 4, 3, dtype=torch.long),
             "peer_weights": torch.zeros(1, 4, 3),
             "peer_mask": torch.zeros(1, 4, 3, dtype=torch.bool),
-            "role": torch.tensor([0]), "location": torch.tensor([0]),
-            "duration": torch.tensor([0]), "privilege": torch.tensor([0]),
+            "role": torch.tensor([0]),
+            "location": torch.tensor([0]),
+            "duration": torch.tensor([0]),
+            "privilege": torch.tensor([0]),
         }
         out = tower(ctx)
         self.assertEqual(out.shape, (1, 8))
@@ -719,7 +785,9 @@ class TestEdgeCaseEmptyPeers(unittest.TestCase):
 class TestEdgeCaseAllPaddingAction(unittest.TestCase):
     def test_all_padding_produces_finite_output(self):
         cfg = ModelConfig(
-            principal_vocab_size=5, embed_dim=8, token_dim=4,
+            principal_vocab_size=5,
+            embed_dim=8,
+            token_dim=4,
             action_hidden=[16],
         )
         tower = ActionTower(cfg)
@@ -738,7 +806,7 @@ class TestHuberLikeLossBoundary(unittest.TestCase):
         x = torch.tensor([delta])
         # Quadratic: 0.5 * delta^2
         # Linear: delta * (delta - 0.5 * delta) = 0.5 * delta^2
-        self.assertAlmostEqual(huber_like_loss(x, delta).item(), 0.5 * delta ** 2, places=6)
+        self.assertAlmostEqual(huber_like_loss(x, delta).item(), 0.5 * delta**2, places=6)
 
     def test_zero_input(self):
         self.assertAlmostEqual(huber_like_loss(torch.tensor([0.0])).item(), 0.0, places=6)
@@ -766,11 +834,17 @@ class TestSourceTypeRouting(unittest.TestCase):
 
     def test_different_towers_produce_different_embeddings(self):
         cfg = ModelConfig(
-            principal_vocab_size=5, resource_vocab_size=5,
-            embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
-            num_roles=2, num_locations=2,
-            num_duration_buckets=5, num_privilege_levels=3,
+            principal_vocab_size=5,
+            resource_vocab_size=5,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
+            num_roles=2,
+            num_locations=2,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
             sources=["gworkspace", "github"],
         )
         model = FacadeModel(cfg)
@@ -790,11 +864,16 @@ class TestSyntheticContextReshape(unittest.TestCase):
 
     def test_reshape_preserves_sample_context_pairing(self):
         cfg = ModelConfig(
-            principal_vocab_size=5, resource_vocab_size=5,
-            embed_dim=8, token_dim=4, static_embed_dim=4,
+            principal_vocab_size=5,
+            resource_vocab_size=5,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
             context_hidden=[16],
-            num_roles=2, num_locations=2,
-            num_duration_buckets=5, num_privilege_levels=3,
+            num_roles=2,
+            num_locations=2,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
         )
         tower = ContextTower(cfg)
         B, n_p = 2, 3
@@ -834,11 +913,17 @@ class TestModelSemantic(unittest.TestCase):
 
     def test_same_input_same_output(self):
         cfg = ModelConfig(
-            principal_vocab_size=5, resource_vocab_size=5,
-            embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
-            num_roles=2, num_locations=2,
-            num_duration_buckets=5, num_privilege_levels=3,
+            principal_vocab_size=5,
+            resource_vocab_size=5,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
+            num_roles=2,
+            num_locations=2,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
             sources=["gworkspace"],
         )
         model = FacadeModel(cfg)
@@ -853,8 +938,10 @@ class TestModelSemantic(unittest.TestCase):
             "peer_indices": torch.zeros(1, 4, 2, dtype=torch.long),
             "peer_weights": torch.zeros(1, 4, 2),
             "peer_mask": torch.zeros(1, 4, 2, dtype=torch.bool),
-            "role": torch.tensor([0]), "location": torch.tensor([0]),
-            "duration": torch.tensor([0]), "privilege": torch.tensor([0]),
+            "role": torch.tensor([0]),
+            "location": torch.tensor([0]),
+            "duration": torch.tensor([0]),
+            "privilege": torch.tensor([0]),
         }
         with torch.no_grad():
             s1 = model.score("gworkspace", act_i, act_w, act_m, ctx)
@@ -863,11 +950,17 @@ class TestModelSemantic(unittest.TestCase):
 
     def test_different_contexts_different_scores(self):
         cfg = ModelConfig(
-            principal_vocab_size=10, resource_vocab_size=10,
-            embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
-            num_roles=3, num_locations=3,
-            num_duration_buckets=5, num_privilege_levels=3,
+            principal_vocab_size=10,
+            resource_vocab_size=10,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
+            num_roles=3,
+            num_locations=3,
+            num_duration_buckets=5,
+            num_privilege_levels=3,
             sources=["gworkspace"],
         )
         model = FacadeModel(cfg)
@@ -884,15 +977,16 @@ class TestModelSemantic(unittest.TestCase):
                 "peer_indices": torch.tensor([[[peer_idx, 0], [0, 0], [0, 0], [0, 0]]]),
                 "peer_weights": torch.tensor([[[1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]]),
                 "peer_mask": torch.tensor([[[True, False], [False, False], [False, False], [False, False]]]),
-                "role": torch.tensor([role]), "location": torch.tensor([loc]),
-                "duration": torch.tensor([0]), "privilege": torch.tensor([0]),
+                "role": torch.tensor([role]),
+                "location": torch.tensor([loc]),
+                "duration": torch.tensor([0]),
+                "privilege": torch.tensor([0]),
             }
 
         with torch.no_grad():
             s1 = model.score("gworkspace", act_i, act_w, act_m, _ctx(0, 0, 1))
             s2 = model.score("gworkspace", act_i, act_w, act_m, _ctx(2, 2, 5))
-        self.assertFalse(torch.allclose(s1, s2),
-                         "Different contexts should produce different scores")
+        self.assertFalse(torch.allclose(s1, s2), "Different contexts should produce different scores")
 
 
 class TestBuildTrainingPairsFilters(unittest.TestCase):
@@ -903,13 +997,14 @@ class TestBuildTrainingPairsFilters(unittest.TestCase):
         }
         contexts = {
             0: ContextFeatures(
-                0, [], PeerFeatures({}, {}, {}),
+                0,
+                [],
+                PeerFeatures({}, {}, {}),
                 CollaborationFeatures({}),
                 StaticFeatures("engineer", "1-3yr", "US-NY", "regular"),
             ),
         }
-        fs = FeatureSet(actions=actions, contexts=contexts,
-                        principal_vocab_size=100, resource_vocab={"doc": 0})
+        fs = FeatureSet(actions=actions, contexts=contexts, principal_vocab_size=100, resource_vocab={"doc": 0})
         pairs = build_training_pairs(fs)
         pidxs = {p.principal_idx for p in pairs}
         self.assertIn(0, pidxs)
@@ -933,15 +1028,12 @@ class TestDatasetSyntheticNeverSelf(unittest.TestCase):
                 # At minimum, synthetic should not be the exact same context tensor
                 if torch.equal(syn_j["role"], nat_ctx["role"]):
                     # Could be same role by chance; check full context
-                    all_same = all(
-                        torch.equal(syn_j[k], nat_ctx[k]) for k in nat_ctx
-                    )
+                    all_same = all(torch.equal(syn_j[k], nat_ctx[k]) for k in nat_ctx)
                     # If all tensors are identical, the sampling loop failed
                     # (this is probabilistically possible but extremely unlikely
                     # with 5 distinct principals)
                     if all_same:
-                        self.fail(f"Synthetic context {j} at pair {i} is identical "
-                                  f"to natural context")
+                        self.fail(f"Synthetic context {j} at pair {i} is identical to natural context")
 
 
 class TestCollateSingleItem(unittest.TestCase):

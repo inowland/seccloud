@@ -258,12 +258,15 @@ def ingest_raw_events(workspace: Workspace, dsn: str | None = None) -> dict[str,
 
 
 def _project_events_inline(
-    workspace: Workspace, events: list[dict[str, Any]], dsn: str,
+    workspace: Workspace,
+    events: list[dict[str, Any]],
+    dsn: str,
 ) -> None:
     """Project a batch of normalized events directly to postgres."""
     try:
         import psycopg
         from psycopg.rows import dict_row
+
         from seccloud.projection_store import ensure_projection_schema, upsert_event_rows
 
         with psycopg.connect(dsn, row_factory=dict_row) as conn:
@@ -350,7 +353,6 @@ def _replay_precomputed_detections(workspace: Workspace) -> dict[str, Any]:
     detections = deserialize_precomputed(precomputed_data)
 
     existing_detection_ids = {item["detection_id"] for item in workspace.list_detections()}
-    new_detections = 0
 
     new_det_dicts: list[dict[str, Any]] = []
     for pdet in detections:
@@ -383,12 +385,12 @@ def _replay_precomputed_detections(workspace: Workspace) -> dict[str, Any]:
 
 
 def _project_detections_fast(
-    workspace: Workspace, detections: list[dict[str, Any]],
+    workspace: Workspace,
+    detections: list[dict[str, Any]],
 ) -> None:
     """Project detections directly to postgres without scanning event files."""
     import json
 
-    from seccloud.local_postgres import local_postgres_dsn
     from seccloud.projection_store import (
         PROJECTED_DETECTIONS_TABLE,
         _tbl,

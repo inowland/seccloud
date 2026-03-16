@@ -501,13 +501,17 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                 current_ids=detection_ids,
             )
             _delete_tenant_rows_by_ids(
-                cur, table=PROJECTED_DETECTIONS_TABLE,
-                tenant_id=workspace.tenant_id, id_column="detection_id",
+                cur,
+                table=PROJECTED_DETECTIONS_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="detection_id",
                 ids=stale_detection_ids,
             )
             _delete_tenant_rows_by_ids(
-                cur, table=DETECTION_EVENT_EDGE_TABLE,
-                tenant_id=workspace.tenant_id, id_column="detection_id",
+                cur,
+                table=DETECTION_EVENT_EDGE_TABLE,
+                tenant_id=workspace.tenant_id,
+                id_column="detection_id",
                 ids=stale_detection_ids,
             )
             states = {

@@ -9,27 +9,26 @@ appear in the UI.
 from __future__ import annotations
 
 import hashlib
-import random
 from dataclasses import dataclass
 from typing import Any
 
 import torch
 
+from seccloud.contracts import Detection, EvidencePointer
 from seccloud.contrastive_model import (
+    FacadeDataset,
     FacadeModel,
     build_categorical_vocabs,
     build_training_pairs,
     collate_facade,
     config_from_features,
     train_epoch,
-    FacadeDataset,
 )
-from seccloud.contracts import Detection, EvidencePointer
 from seccloud.evaluation import (
     _compute_padding_limits,
     score_principal,
 )
-from seccloud.feature_pipeline import FeatureSet, build_features
+from seccloud.feature_pipeline import build_features
 from seccloud.ids import event_key
 from seccloud.synthetic_scale import (
     OrgPrincipal,
@@ -95,23 +94,27 @@ def _feature_attributions_for_scenario(scenario: str, score: float) -> dict[str,
     """Generate feature attribution breakdowns for an ML detection."""
     base: dict[str, float] = {}
     if scenario == "slow_exfiltration":
-        base = {"cross_dept_access": 0.30, "volume_ramp": 0.25,
-                "sensitivity_exposure": 0.25, "peer_distance": 0.20}
+        base = {"cross_dept_access": 0.30, "volume_ramp": 0.25, "sensitivity_exposure": 0.25, "peer_distance": 0.20}
     elif scenario == "credential_compromise":
-        base = {"peer_distance": 0.35, "context_shift": 0.30,
-                "resource_breadth": 0.20, "temporal_anomaly": 0.15}
+        base = {"peer_distance": 0.35, "context_shift": 0.30, "resource_breadth": 0.20, "temporal_anomaly": 0.15}
     elif scenario == "privilege_escalation":
-        base = {"accessor_set_mismatch": 0.40, "admin_resource_access": 0.30,
-                "peer_distance": 0.20, "role_mismatch": 0.10}
+        base = {
+            "accessor_set_mismatch": 0.40,
+            "admin_resource_access": 0.30,
+            "peer_distance": 0.20,
+            "role_mismatch": 0.10,
+        }
     elif scenario == "departing_employee":
-        base = {"resource_breadth": 0.35, "volume_spike": 0.30,
-                "cross_dept_access": 0.20, "sensitivity_exposure": 0.15}
+        base = {"resource_breadth": 0.35, "volume_spike": 0.30, "cross_dept_access": 0.20, "sensitivity_exposure": 0.15}
     elif scenario == "account_takeover":
-        base = {"temporal_anomaly": 0.35, "resource_shift": 0.30,
-                "peer_distance": 0.20, "context_shift": 0.15}
+        base = {"temporal_anomaly": 0.35, "resource_shift": 0.30, "peer_distance": 0.20, "context_shift": 0.15}
     elif scenario == "insider_collaboration":
-        base = {"shared_unusual_access": 0.35, "cross_dept_access": 0.25,
-                "peer_distance": 0.25, "coordination_signal": 0.15}
+        base = {
+            "shared_unusual_access": 0.35,
+            "cross_dept_access": 0.25,
+            "peer_distance": 0.25,
+            "coordination_signal": 0.15,
+        }
     # Scale by score
     return {k: round(v * score, 3) for k, v in base.items()}
 
@@ -139,21 +142,29 @@ def precompute_detections(
     # Train model
     cfg = config_from_features(
         fs,
-        embed_dim=64, token_dim=32, static_embed_dim=8,
-        action_hidden=[256, 128], context_hidden=[256, 128],
-        n_positive=10, batch_size=512, learning_rate=3e-4, epochs=epochs,
+        embed_dim=64,
+        token_dim=32,
+        static_embed_dim=8,
+        action_hidden=[256, 128],
+        context_hidden=[256, 128],
+        n_positive=10,
+        batch_size=512,
+        learning_rate=3e-4,
+        epochs=epochs,
     )
     model = FacadeModel(cfg).to(DEVICE)
     all_pairs = build_training_pairs(fs)
     # Train on all benign pairs (no holdout for demo)
-    benign_pairs = [p for p in all_pairs
-                    if _event_scenario_for_resource(events, p.resource_id) == "baseline"]
+    benign_pairs = [p for p in all_pairs if _event_scenario_for_resource(events, p.resource_id) == "baseline"]
     if not benign_pairs:
         benign_pairs = all_pairs
     ds = FacadeDataset(fs, benign_pairs, cat_vocabs, cfg, rng_seed=seed)
     loader = torch.utils.data.DataLoader(
-        ds, batch_size=cfg.batch_size, shuffle=True,
-        collate_fn=collate_facade, num_workers=0,
+        ds,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        collate_fn=collate_facade,
+        num_workers=0,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
     for _ in range(epochs):
@@ -167,6 +178,7 @@ def precompute_detections(
 
     # Collect per-principal distinct actions from ALL events
     from collections import defaultdict
+
     principal_actions: dict[int, set[tuple[str, str]]] = defaultdict(set)
     for e in events:
         email = e.get("actor_email")
@@ -181,9 +193,17 @@ def precompute_detections(
     with torch.no_grad():
         for pidx, action_set in principal_actions.items():
             scores[pidx] = score_principal(
-                model, pidx, list(action_set), fs, cat_vocabs,
-                limits["max_act"], limits["max_win"], limits["max_res"],
-                limits["max_peers"], delta=0.3, device=DEVICE,
+                model,
+                pidx,
+                list(action_set),
+                fs,
+                cat_vocabs,
+                limits["max_act"],
+                limits["max_win"],
+                limits["max_res"],
+                limits["max_peers"],
+                delta=0.3,
+                device=DEVICE,
             )
 
     # Identify attack principals and their scenarios
@@ -226,20 +246,21 @@ def precompute_detections(
             evidence_pointers = []
             for se in scenario_events[-6:]:  # limit to last 6 events
                 ek = event_key(
-                    se["source"], se["source_event_id"],
+                    se["source"],
+                    se["source_event_id"],
                     integration_id="synthetic-stream",
                 )
                 ev_keys.append(ek)
-                evidence_pointers.append(EvidencePointer(
-                    source=se["source"],
-                    object_key=f"raw/{se['source']}/{se['source_event_id']}",
-                    raw_event_id=se["source_event_id"],
-                    observed_at=se["observed_at"],
-                ))
+                evidence_pointers.append(
+                    EvidencePointer(
+                        source=se["source"],
+                        object_key=f"raw/{se['source']}/{se['source_event_id']}",
+                        raw_event_id=se["source_event_id"],
+                        observed_at=se["observed_at"],
+                    )
+                )
 
-            digest = hashlib.sha256(
-                f"ml:{scenario}:{principal.email}".encode()
-            ).hexdigest()[:12]
+            digest = hashlib.sha256(f"ml:{scenario}:{principal.email}".encode()).hexdigest()[:12]
 
             confidence = min(0.99, 0.5 + score / 20.0)
             severity = "high" if score >= 10.0 else "medium"
@@ -259,12 +280,14 @@ def precompute_detections(
                 model_version="contrastive-facade-v1",
             )
 
-            detections.append(PrecomputedDetection(
-                detection=det,
-                trigger_cursor=trigger,
-                scenario=scenario,
-                principal_email=principal.email,
-            ))
+            detections.append(
+                PrecomputedDetection(
+                    detection=det,
+                    trigger_cursor=trigger,
+                    scenario=scenario,
+                    principal_email=principal.email,
+                )
+            )
 
     # Sort by trigger cursor so they fire in chronological order
     detections.sort(key=lambda d: d.trigger_cursor)
@@ -272,7 +295,8 @@ def precompute_detections(
 
 
 def _event_scenario_for_resource(
-    events: list[dict[str, Any]], resource_id: str,
+    events: list[dict[str, Any]],
+    resource_id: str,
 ) -> str:
     """Return the scenario label for events referencing this resource."""
     for e in events:
@@ -299,10 +323,7 @@ def deserialize_precomputed(data: list[dict[str, Any]]) -> list[PrecomputedDetec
     results = []
     for item in data:
         det_data = item["detection"]
-        evidence = [
-            EvidencePointer(**ep) if isinstance(ep, dict) else ep
-            for ep in det_data.get("evidence", [])
-        ]
+        evidence = [EvidencePointer(**ep) if isinstance(ep, dict) else ep for ep in det_data.get("evidence", [])]
         det = Detection(
             detection_id=det_data["detection_id"],
             scenario=det_data["scenario"],
@@ -318,10 +339,12 @@ def deserialize_precomputed(data: list[dict[str, Any]]) -> list[PrecomputedDetec
             model_version=det_data["model_version"],
             status=det_data.get("status", "open"),
         )
-        results.append(PrecomputedDetection(
-            detection=det,
-            trigger_cursor=item["trigger_cursor"],
-            scenario=item["scenario"],
-            principal_email=item["principal_email"],
-        ))
+        results.append(
+            PrecomputedDetection(
+                detection=det,
+                trigger_cursor=item["trigger_cursor"],
+                scenario=item["scenario"],
+                principal_email=item["principal_email"],
+            )
+        )
     return results

@@ -194,7 +194,7 @@ class WeightedSampler:
 
 def zipf_weights(n: int, s: float = 1.0) -> list[float]:
     """Return Zipf weights for ranks 1..n with exponent s."""
-    return [1.0 / (k ** s) for k in range(1, n + 1)]
+    return [1.0 / (k**s) for k in range(1, n + 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +297,14 @@ def generate_org(cfg: ScaleConfig, rng: random.Random) -> tuple[list[OrgPrincipa
                 idx += 1
                 assigned += 1
 
-            teams.append(OrgTeam(
-                name=team_name,
-                department=dept_name,
-                member_indices=team_member_indices,
-                manager_idx=manager.idx,
-            ))
+            teams.append(
+                OrgTeam(
+                    name=team_name,
+                    department=dept_name,
+                    member_indices=team_member_indices,
+                    manager_idx=manager.idx,
+                )
+            )
 
     return principals, teams
 
@@ -340,41 +342,47 @@ def generate_resources(
         n_docs = max(1, int(len(team.member_indices) * cfg.docs_per_principal))
         for j in range(n_docs):
             doc_id = f"gworkspace:doc/{team.name}-doc-{j:04d}"
-            resources["gworkspace"].append(ResourceDef(
-                resource_id=doc_id,
-                name=f"{team.name} Doc {j}",
-                kind="document",
-                source="gworkspace",
-                sensitivity=sensitivity_sampler.sample(rng),
-                owning_team=team.name,
-                owning_department=team.department,
-            ))
+            resources["gworkspace"].append(
+                ResourceDef(
+                    resource_id=doc_id,
+                    name=f"{team.name} Doc {j}",
+                    kind="document",
+                    source="gworkspace",
+                    sensitivity=sensitivity_sampler.sample(rng),
+                    owning_team=team.name,
+                    owning_department=team.department,
+                )
+            )
 
         n_repos = max(1, int(cfg.repos_per_team))
         for j in range(n_repos):
             repo_name = f"{team.name}-repo-{j}"
-            resources["github"].append(ResourceDef(
-                resource_id=f"github:repo/{repo_name}",
-                name=repo_name,
-                kind="repo",
-                source="github",
-                sensitivity=sensitivity_sampler.sample(rng),
-                owning_team=team.name,
-                owning_department=team.department,
-            ))
+            resources["github"].append(
+                ResourceDef(
+                    resource_id=f"github:repo/{repo_name}",
+                    name=repo_name,
+                    kind="repo",
+                    source="github",
+                    sensitivity=sensitivity_sampler.sample(rng),
+                    owning_team=team.name,
+                    owning_department=team.department,
+                )
+            )
 
         n_tables = max(1, int(cfg.tables_per_team))
         for j in range(n_tables):
             table_name = f"{team.name.replace('-', '_')}_table_{j}"
-            resources["snowflake"].append(ResourceDef(
-                resource_id=f"snowflake:dataset/{table_name}",
-                name=table_name,
-                kind="dataset",
-                source="snowflake",
-                sensitivity=sensitivity_sampler.sample(rng),
-                owning_team=team.name,
-                owning_department=team.department,
-            ))
+            resources["snowflake"].append(
+                ResourceDef(
+                    resource_id=f"snowflake:dataset/{table_name}",
+                    name=table_name,
+                    kind="dataset",
+                    source="snowflake",
+                    sensitivity=sensitivity_sampler.sample(rng),
+                    owning_team=team.name,
+                    owning_department=team.department,
+                )
+            )
 
     return resources
 
@@ -401,6 +409,7 @@ def _build_resource_index(
 @dataclass(slots=True)
 class PrincipalAffinities:
     """Per-source weighted resource samplers for a single principal."""
+
     by_source: dict[str, WeightedSampler]
 
 
@@ -439,9 +448,7 @@ def build_principal_affinities(
         dept_name = p.department
 
         own_team = by_team.get(team_name, [])
-        same_dept_other = [
-            r for r in by_dept.get(dept_name, []) if r.owning_team != team_name
-        ]
+        same_dept_other = [r for r in by_dept.get(dept_name, []) if r.owning_team != team_name]
 
         # Collect all candidate resources with weights, then split by source
         items: list[ResourceDef] = []
@@ -509,36 +516,70 @@ def build_principal_affinities(
 
 ROLE_APP_AFFINITIES: dict[str, list[str]] = {
     "engineer": [
-        "okta:jira", "okta:github", "okta:slack", "okta:confluence",
-        "okta:aws-console", "okta:datadog",
+        "okta:jira",
+        "okta:github",
+        "okta:slack",
+        "okta:confluence",
+        "okta:aws-console",
+        "okta:datadog",
     ],
     "senior-engineer": [
-        "okta:jira", "okta:github", "okta:slack", "okta:confluence",
-        "okta:aws-console", "okta:datadog", "okta:pagerduty",
+        "okta:jira",
+        "okta:github",
+        "okta:slack",
+        "okta:confluence",
+        "okta:aws-console",
+        "okta:datadog",
+        "okta:pagerduty",
     ],
     "staff-engineer": [
-        "okta:jira", "okta:github", "okta:slack", "okta:confluence",
-        "okta:aws-console", "okta:datadog", "okta:pagerduty",
+        "okta:jira",
+        "okta:github",
+        "okta:slack",
+        "okta:confluence",
+        "okta:aws-console",
+        "okta:datadog",
+        "okta:pagerduty",
     ],
     "analyst": [
-        "okta:jira", "okta:slack", "okta:confluence", "okta:snowflake", "okta:tableau",
+        "okta:jira",
+        "okta:slack",
+        "okta:confluence",
+        "okta:snowflake",
+        "okta:tableau",
     ],
     "data-engineer": [
-        "okta:jira", "okta:github", "okta:slack", "okta:snowflake",
-        "okta:aws-console", "okta:datadog",
+        "okta:jira",
+        "okta:github",
+        "okta:slack",
+        "okta:snowflake",
+        "okta:aws-console",
+        "okta:datadog",
     ],
     "pm": ["okta:jira", "okta:slack", "okta:confluence", "okta:figma", "okta:notion"],
     "designer": ["okta:jira", "okta:slack", "okta:figma", "okta:notion"],
     "manager": [
-        "okta:jira", "okta:slack", "okta:confluence", "okta:workday", "okta:greenhouse",
+        "okta:jira",
+        "okta:slack",
+        "okta:confluence",
+        "okta:workday",
+        "okta:greenhouse",
     ],
     "security-admin": [
-        "okta:admin-console", "okta:jira", "okta:slack",
-        "okta:aws-console", "okta:1password", "okta:datadog",
+        "okta:admin-console",
+        "okta:jira",
+        "okta:slack",
+        "okta:aws-console",
+        "okta:1password",
+        "okta:datadog",
     ],
     "executive": [
-        "okta:slack", "okta:confluence", "okta:workday",
-        "okta:netsuite", "okta:salesforce", "okta:zoom",
+        "okta:slack",
+        "okta:confluence",
+        "okta:workday",
+        "okta:netsuite",
+        "okta:salesforce",
+        "okta:zoom",
     ],
 }
 
@@ -611,9 +652,7 @@ def _generate_day_events(
     events: list[dict[str, Any]] = []
 
     for p in principals:
-        base_count = rng.lognormvariate(
-            math.log(cfg.events_per_day_median), cfg.events_per_day_sigma
-        )
+        base_count = rng.lognormvariate(math.log(cfg.events_per_day_median), cfg.events_per_day_sigma)
         day_count = max(0, int(base_count * day_weight + 0.5))
         if day_count == 0:
             continue
@@ -652,52 +691,60 @@ def _generate_day_events(
             if source == "okta":
                 app_id = app_aff.sample(rng)
                 app_info = APP_BY_ID.get(app_id, {"name": "Unknown", "sensitivity": "internal"})
-                payload.update({
-                    "event_type": "login",
-                    "resource_id": app_id,
-                    "resource_name": app_info["name"],
-                    "resource_kind": "app",
-                    "sensitivity": app_info["sensitivity"],
-                    "geo": p.location,
-                    "ip": f"10.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}",
-                    "privileged": p.role in ("security-admin", "executive", "manager"),
-                })
+                payload.update(
+                    {
+                        "event_type": "login",
+                        "resource_id": app_id,
+                        "resource_name": app_info["name"],
+                        "resource_kind": "app",
+                        "sensitivity": app_info["sensitivity"],
+                        "geo": p.location,
+                        "ip": f"10.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}",
+                        "privileged": p.role in ("security-admin", "executive", "manager"),
+                    }
+                )
             elif source == "gworkspace":
                 res = aff.by_source["gworkspace"].sample(rng)
                 is_share = rng.random() < 0.05
-                payload.update({
-                    "event_type": "share_external" if is_share else "view",
-                    "resource_id": res.resource_id,
-                    "resource_name": res.name,
-                    "resource_kind": "document",
-                    "sensitivity": res.sensitivity,
-                    "external": is_share,
-                })
+                payload.update(
+                    {
+                        "event_type": "share_external" if is_share else "view",
+                        "resource_id": res.resource_id,
+                        "resource_name": res.name,
+                        "resource_kind": "document",
+                        "sensitivity": res.sensitivity,
+                        "external": is_share,
+                    }
+                )
             elif source == "github":
                 res = aff.by_source["github"].sample(rng)
                 event_type = github_sampler.sample(rng)
                 bytes_mb = rng.randint(1, 20) if event_type == "view" else rng.randint(50, 500)
-                payload.update({
-                    "event_type": event_type,
-                    "resource_id": res.resource_id,
-                    "resource_name": res.name,
-                    "resource_kind": "repo",
-                    "sensitivity": res.sensitivity,
-                    "bytes_transferred_mb": bytes_mb,
-                })
+                payload.update(
+                    {
+                        "event_type": event_type,
+                        "resource_id": res.resource_id,
+                        "resource_name": res.name,
+                        "resource_kind": "repo",
+                        "sensitivity": res.sensitivity,
+                        "bytes_transferred_mb": bytes_mb,
+                    }
+                )
             elif source == "snowflake":
                 res = aff.by_source["snowflake"].sample(rng)
                 event_type = snowflake_sampler.sample(rng)
                 rows = rng.randint(10, 5000) if event_type == "query" else rng.randint(1000, 100000)
-                payload.update({
-                    "event_type": event_type,
-                    "resource_id": res.resource_id,
-                    "resource_name": res.name,
-                    "resource_kind": "dataset",
-                    "sensitivity": res.sensitivity,
-                    "rows_read": rows,
-                    "warehouse": warehouse_sampler.sample(rng),
-                })
+                payload.update(
+                    {
+                        "event_type": event_type,
+                        "resource_id": res.resource_id,
+                        "resource_name": res.name,
+                        "resource_kind": "dataset",
+                        "sensitivity": res.sensitivity,
+                        "rows_read": rows,
+                        "warehouse": warehouse_sampler.sample(rng),
+                    }
+                )
 
             events.append(payload)
 
@@ -742,9 +789,7 @@ def _make_scenario_event(
         "source": source,
         "source_event_id": f"{source}-scen-{counter[0]:08d}",
         "observed_at": format_timestamp(observed_at),
-        "received_at": format_timestamp(
-            observed_at + timedelta(minutes=rng.randint(1, 5))
-        ),
+        "received_at": format_timestamp(observed_at + timedelta(minutes=rng.randint(1, 5))),
         "actor_email": principal.email,
         "actor_name": principal.name,
         "department": principal.department,
@@ -832,21 +877,24 @@ def _inject_slow_exfiltration(
             res = rng.choice(targets)
             ts = _random_ts(day, rng, principal.tz_offset)
             event_type = "export" if rng.random() < 0.15 + 0.45 * progress else "query"
-            rows = (
-                rng.randint(5000, 200000)
-                if event_type == "export"
-                else rng.randint(1000, 50000)
+            rows = rng.randint(5000, 200000) if event_type == "export" else rng.randint(1000, 50000)
+            events.append(
+                _make_scenario_event(
+                    "snowflake",
+                    principal,
+                    ts,
+                    scenario,
+                    counter,
+                    rng,
+                    event_type=event_type,
+                    resource_id=res.resource_id,
+                    resource_name=res.name,
+                    resource_kind="dataset",
+                    sensitivity=res.sensitivity,
+                    rows_read=rows,
+                    warehouse=rng.choice(WAREHOUSE_NAMES),
+                )
             )
-            events.append(_make_scenario_event(
-                "snowflake", principal, ts, scenario, counter, rng,
-                event_type=event_type,
-                resource_id=res.resource_id,
-                resource_name=res.name,
-                resource_kind="dataset",
-                sensitivity=res.sensitivity,
-                rows_read=rows,
-                warehouse=rng.choice(WAREHOUSE_NAMES),
-            ))
 
     return events, ScenarioSpec(scenario, [principal.idx], len(events))
 
@@ -886,60 +934,91 @@ def _inject_credential_compromise(
         # Okta logins from new geo
         for _ in range(rng.randint(3, 6)):
             ts = _random_ts(day, rng, new_tz)
-            app_id = rng.choice([
-                "okta:aws-console", "okta:admin-console", "okta:snowflake",
-                "okta:github", "okta:google-workspace",
-            ])
-            app_info = APP_BY_ID.get(
-                app_id, {"name": "Unknown", "sensitivity": "internal"}
+            app_id = rng.choice(
+                [
+                    "okta:aws-console",
+                    "okta:admin-console",
+                    "okta:snowflake",
+                    "okta:github",
+                    "okta:google-workspace",
+                ]
             )
-            events.append(_make_scenario_event(
-                "okta", principal, ts, scenario, counter, rng,
-                event_type="login",
-                resource_id=app_id,
-                resource_name=app_info["name"],
-                resource_kind="app",
-                sensitivity=app_info["sensitivity"],
-                geo=new_geo,
-                ip=f"185.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}",
-                privileged=False,
-            ))
+            app_info = APP_BY_ID.get(app_id, {"name": "Unknown", "sensitivity": "internal"})
+            events.append(
+                _make_scenario_event(
+                    "okta",
+                    principal,
+                    ts,
+                    scenario,
+                    counter,
+                    rng,
+                    event_type="login",
+                    resource_id=app_id,
+                    resource_name=app_info["name"],
+                    resource_kind="app",
+                    sensitivity=app_info["sensitivity"],
+                    geo=new_geo,
+                    ip=f"185.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}",
+                    privileged=False,
+                )
+            )
 
         # Access unfamiliar resources
         for _ in range(rng.randint(4, 8)):
             res = rng.choice(cross_resources)
             ts = _random_ts(day, rng, new_tz)
             if res.source == "gworkspace":
-                events.append(_make_scenario_event(
-                    "gworkspace", principal, ts, scenario, counter, rng,
-                    event_type="view",
-                    resource_id=res.resource_id,
-                    resource_name=res.name,
-                    resource_kind="document",
-                    sensitivity=res.sensitivity,
-                    external=False,
-                ))
+                events.append(
+                    _make_scenario_event(
+                        "gworkspace",
+                        principal,
+                        ts,
+                        scenario,
+                        counter,
+                        rng,
+                        event_type="view",
+                        resource_id=res.resource_id,
+                        resource_name=res.name,
+                        resource_kind="document",
+                        sensitivity=res.sensitivity,
+                        external=False,
+                    )
+                )
             elif res.source == "snowflake":
-                events.append(_make_scenario_event(
-                    "snowflake", principal, ts, scenario, counter, rng,
-                    event_type="query",
-                    resource_id=res.resource_id,
-                    resource_name=res.name,
-                    resource_kind="dataset",
-                    sensitivity=res.sensitivity,
-                    rows_read=rng.randint(100, 10000),
-                    warehouse=rng.choice(WAREHOUSE_NAMES),
-                ))
+                events.append(
+                    _make_scenario_event(
+                        "snowflake",
+                        principal,
+                        ts,
+                        scenario,
+                        counter,
+                        rng,
+                        event_type="query",
+                        resource_id=res.resource_id,
+                        resource_name=res.name,
+                        resource_kind="dataset",
+                        sensitivity=res.sensitivity,
+                        rows_read=rng.randint(100, 10000),
+                        warehouse=rng.choice(WAREHOUSE_NAMES),
+                    )
+                )
             elif res.source == "github":
-                events.append(_make_scenario_event(
-                    "github", principal, ts, scenario, counter, rng,
-                    event_type="clone",
-                    resource_id=res.resource_id,
-                    resource_name=res.name,
-                    resource_kind="repo",
-                    sensitivity=res.sensitivity,
-                    bytes_transferred_mb=rng.randint(50, 300),
-                ))
+                events.append(
+                    _make_scenario_event(
+                        "github",
+                        principal,
+                        ts,
+                        scenario,
+                        counter,
+                        rng,
+                        event_type="clone",
+                        resource_id=res.resource_id,
+                        resource_name=res.name,
+                        resource_kind="repo",
+                        sensitivity=res.sensitivity,
+                        bytes_transferred_mb=rng.randint(50, 300),
+                    )
+                )
 
     return events, ScenarioSpec(scenario, [principal.idx], len(events))
 
@@ -960,14 +1039,23 @@ def _inject_privilege_escalation(
     events: list[dict[str, Any]] = []
 
     admin_apps = [
-        "okta:admin-console", "okta:aws-console", "okta:workday", "okta:1password",
+        "okta:admin-console",
+        "okta:aws-console",
+        "okta:workday",
+        "okta:1password",
     ]
     critical_data = _cross_dept_resources(
-        resources, principal.department, "snowflake", "critical",
+        resources,
+        principal.department,
+        "snowflake",
+        "critical",
     )
     if not critical_data:
         critical_data = _cross_dept_resources(
-            resources, principal.department, "snowflake", "high",
+            resources,
+            principal.department,
+            "snowflake",
+            "high",
         )
     if not critical_data:
         critical_data = resources["snowflake"][:5]
@@ -983,32 +1071,46 @@ def _inject_privilege_escalation(
             app_id = rng.choice(admin_apps)
             app_info = APP_BY_ID[app_id]
             ts = _random_ts(day, rng, principal.tz_offset)
-            events.append(_make_scenario_event(
-                "okta", principal, ts, scenario, counter, rng,
-                event_type="login",
-                resource_id=app_id,
-                resource_name=app_info["name"],
-                resource_kind="app",
-                sensitivity=app_info["sensitivity"],
-                geo=principal.location,
-                ip=f"10.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}",
-                privileged=False,  # role hasn't changed — this is the anomaly
-            ))
+            events.append(
+                _make_scenario_event(
+                    "okta",
+                    principal,
+                    ts,
+                    scenario,
+                    counter,
+                    rng,
+                    event_type="login",
+                    resource_id=app_id,
+                    resource_name=app_info["name"],
+                    resource_kind="app",
+                    sensitivity=app_info["sensitivity"],
+                    geo=principal.location,
+                    ip=f"10.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}",
+                    privileged=False,  # role hasn't changed — this is the anomaly
+                )
+            )
 
         # Access critical/high-sensitivity data
         for _ in range(rng.randint(2, 4)):
             res = rng.choice(critical_data)
             ts = _random_ts(day, rng, principal.tz_offset)
-            events.append(_make_scenario_event(
-                "snowflake", principal, ts, scenario, counter, rng,
-                event_type="query",
-                resource_id=res.resource_id,
-                resource_name=res.name,
-                resource_kind="dataset",
-                sensitivity=res.sensitivity,
-                rows_read=rng.randint(100, 5000),
-                warehouse=rng.choice(WAREHOUSE_NAMES),
-            ))
+            events.append(
+                _make_scenario_event(
+                    "snowflake",
+                    principal,
+                    ts,
+                    scenario,
+                    counter,
+                    rng,
+                    event_type="query",
+                    resource_id=res.resource_id,
+                    resource_name=res.name,
+                    resource_kind="dataset",
+                    sensitivity=res.sensitivity,
+                    rows_read=rng.randint(100, 5000),
+                    warehouse=rng.choice(WAREHOUSE_NAMES),
+                )
+            )
 
     return events, ScenarioSpec(scenario, [principal.idx], len(events))
 
@@ -1040,44 +1142,65 @@ def _inject_departing_employee(
         sampled_docs = rng.sample(all_docs, min(30, len(all_docs)))
         for doc in sampled_docs:
             ts = _random_ts(day, rng, principal.tz_offset)
-            events.append(_make_scenario_event(
-                "gworkspace", principal, ts, scenario, counter, rng,
-                event_type="view",
-                resource_id=doc.resource_id,
-                resource_name=doc.name,
-                resource_kind="document",
-                sensitivity=doc.sensitivity,
-                external=False,
-            ))
+            events.append(
+                _make_scenario_event(
+                    "gworkspace",
+                    principal,
+                    ts,
+                    scenario,
+                    counter,
+                    rng,
+                    event_type="view",
+                    resource_id=doc.resource_id,
+                    resource_name=doc.name,
+                    resource_kind="document",
+                    sensitivity=doc.sensitivity,
+                    external=False,
+                )
+            )
 
         # Clone repos from many teams
         sampled_repos = rng.sample(all_repos, min(8, len(all_repos)))
         for repo in sampled_repos:
             ts = _random_ts(day, rng, principal.tz_offset)
-            events.append(_make_scenario_event(
-                "github", principal, ts, scenario, counter, rng,
-                event_type="clone",
-                resource_id=repo.resource_id,
-                resource_name=repo.name,
-                resource_kind="repo",
-                sensitivity=repo.sensitivity,
-                bytes_transferred_mb=rng.randint(100, 800),
-            ))
+            events.append(
+                _make_scenario_event(
+                    "github",
+                    principal,
+                    ts,
+                    scenario,
+                    counter,
+                    rng,
+                    event_type="clone",
+                    resource_id=repo.resource_id,
+                    resource_name=repo.name,
+                    resource_kind="repo",
+                    sensitivity=repo.sensitivity,
+                    bytes_transferred_mb=rng.randint(100, 800),
+                )
+            )
 
         # Large data exports
         sampled_tables = rng.sample(all_tables, min(10, len(all_tables)))
         for table in sampled_tables:
             ts = _random_ts(day, rng, principal.tz_offset)
-            events.append(_make_scenario_event(
-                "snowflake", principal, ts, scenario, counter, rng,
-                event_type="export",
-                resource_id=table.resource_id,
-                resource_name=table.name,
-                resource_kind="dataset",
-                sensitivity=table.sensitivity,
-                rows_read=rng.randint(50000, 500000),
-                warehouse=rng.choice(WAREHOUSE_NAMES),
-            ))
+            events.append(
+                _make_scenario_event(
+                    "snowflake",
+                    principal,
+                    ts,
+                    scenario,
+                    counter,
+                    rng,
+                    event_type="export",
+                    resource_id=table.resource_id,
+                    resource_name=table.name,
+                    resource_kind="dataset",
+                    sensitivity=table.sensitivity,
+                    rows_read=rng.randint(50000, 500000),
+                    warehouse=rng.choice(WAREHOUSE_NAMES),
+                )
+            )
 
     return events, ScenarioSpec(scenario, [principal.idx], len(events))
 
@@ -1110,36 +1233,57 @@ def _inject_account_takeover(
             res = rng.choice(cross_resources)
 
             if res.source == "gworkspace":
-                events.append(_make_scenario_event(
-                    "gworkspace", principal, ts, scenario, counter, rng,
-                    event_type="view",
-                    resource_id=res.resource_id,
-                    resource_name=res.name,
-                    resource_kind="document",
-                    sensitivity=res.sensitivity,
-                    external=False,
-                ))
+                events.append(
+                    _make_scenario_event(
+                        "gworkspace",
+                        principal,
+                        ts,
+                        scenario,
+                        counter,
+                        rng,
+                        event_type="view",
+                        resource_id=res.resource_id,
+                        resource_name=res.name,
+                        resource_kind="document",
+                        sensitivity=res.sensitivity,
+                        external=False,
+                    )
+                )
             elif res.source == "snowflake":
-                events.append(_make_scenario_event(
-                    "snowflake", principal, ts, scenario, counter, rng,
-                    event_type="export",
-                    resource_id=res.resource_id,
-                    resource_name=res.name,
-                    resource_kind="dataset",
-                    sensitivity=res.sensitivity,
-                    rows_read=rng.randint(1000, 100000),
-                    warehouse=rng.choice(WAREHOUSE_NAMES),
-                ))
+                events.append(
+                    _make_scenario_event(
+                        "snowflake",
+                        principal,
+                        ts,
+                        scenario,
+                        counter,
+                        rng,
+                        event_type="export",
+                        resource_id=res.resource_id,
+                        resource_name=res.name,
+                        resource_kind="dataset",
+                        sensitivity=res.sensitivity,
+                        rows_read=rng.randint(1000, 100000),
+                        warehouse=rng.choice(WAREHOUSE_NAMES),
+                    )
+                )
             elif res.source == "github":
-                events.append(_make_scenario_event(
-                    "github", principal, ts, scenario, counter, rng,
-                    event_type="clone",
-                    resource_id=res.resource_id,
-                    resource_name=res.name,
-                    resource_kind="repo",
-                    sensitivity=res.sensitivity,
-                    bytes_transferred_mb=rng.randint(50, 400),
-                ))
+                events.append(
+                    _make_scenario_event(
+                        "github",
+                        principal,
+                        ts,
+                        scenario,
+                        counter,
+                        rng,
+                        event_type="clone",
+                        resource_id=res.resource_id,
+                        resource_name=res.name,
+                        resource_kind="repo",
+                        sensitivity=res.sensitivity,
+                        bytes_transferred_mb=rng.randint(50, 400),
+                    )
+                )
 
     return events, ScenarioSpec(scenario, [principal.idx], len(events))
 
@@ -1186,39 +1330,62 @@ def _inject_insider_collaboration(
                 ts = _random_ts(day, rng, p.tz_offset)
 
                 if res.source == "gworkspace":
-                    events.append(_make_scenario_event(
-                        "gworkspace", p, ts, scenario, counter, rng,
-                        event_type="view",
-                        resource_id=res.resource_id,
-                        resource_name=res.name,
-                        resource_kind="document",
-                        sensitivity=res.sensitivity,
-                        external=False,
-                    ))
+                    events.append(
+                        _make_scenario_event(
+                            "gworkspace",
+                            p,
+                            ts,
+                            scenario,
+                            counter,
+                            rng,
+                            event_type="view",
+                            resource_id=res.resource_id,
+                            resource_name=res.name,
+                            resource_kind="document",
+                            sensitivity=res.sensitivity,
+                            external=False,
+                        )
+                    )
                 elif res.source == "snowflake":
-                    events.append(_make_scenario_event(
-                        "snowflake", p, ts, scenario, counter, rng,
-                        event_type="query",
-                        resource_id=res.resource_id,
-                        resource_name=res.name,
-                        resource_kind="dataset",
-                        sensitivity=res.sensitivity,
-                        rows_read=rng.randint(100, 5000),
-                        warehouse=rng.choice(WAREHOUSE_NAMES),
-                    ))
+                    events.append(
+                        _make_scenario_event(
+                            "snowflake",
+                            p,
+                            ts,
+                            scenario,
+                            counter,
+                            rng,
+                            event_type="query",
+                            resource_id=res.resource_id,
+                            resource_name=res.name,
+                            resource_kind="dataset",
+                            sensitivity=res.sensitivity,
+                            rows_read=rng.randint(100, 5000),
+                            warehouse=rng.choice(WAREHOUSE_NAMES),
+                        )
+                    )
                 elif res.source == "github":
-                    events.append(_make_scenario_event(
-                        "github", p, ts, scenario, counter, rng,
-                        event_type="view",
-                        resource_id=res.resource_id,
-                        resource_name=res.name,
-                        resource_kind="repo",
-                        sensitivity=res.sensitivity,
-                        bytes_transferred_mb=rng.randint(1, 20),
-                    ))
+                    events.append(
+                        _make_scenario_event(
+                            "github",
+                            p,
+                            ts,
+                            scenario,
+                            counter,
+                            rng,
+                            event_type="view",
+                            resource_id=res.resource_id,
+                            resource_name=res.name,
+                            resource_kind="repo",
+                            sensitivity=res.sensitivity,
+                            bytes_transferred_mb=rng.randint(1, 20),
+                        )
+                    )
 
     return events, ScenarioSpec(
-        scenario, [principal_a.idx, principal_b.idx], len(events),
+        scenario,
+        [principal_a.idx, principal_b.idx],
+        len(events),
     )
 
 
@@ -1242,10 +1409,7 @@ def inject_scenarios(
     rng.shuffle(candidates)
 
     if len(candidates) < 7:
-        raise ValueError(
-            f"Need >= 7 non-manager principals for scenario injection, "
-            f"got {len(candidates)}"
-        )
+        raise ValueError(f"Need >= 7 non-manager principals for scenario injection, got {len(candidates)}")
 
     # Prefer data roles for exfil, non-admin for priv-esc
     data_roles = {"data-engineer", "analyst"}
@@ -1363,16 +1527,12 @@ def _apply_drift(
             active_indices.add(new_idx)
             new_principals.append(new_p)
 
-        resource_affinities.extend(
-            build_principal_affinities(cfg, new_principals, teams, resources, rng)
-        )
+        resource_affinities.extend(build_principal_affinities(cfg, new_principals, teams, resources, rng))
         app_affinities.extend(build_app_affinities(new_principals, rng))
 
     # --- Role changes (quarterly) ---
     if months_elapsed % 3 == 0:
-        n_changes = max(
-            0, int(len(active_indices) * cfg.role_change_rate_per_quarter)
-        )
+        n_changes = max(0, int(len(active_indices) * cfg.role_change_rate_per_quarter))
         changeable = [i for i in active_indices if not principals[i].is_manager]
         if n_changes > 0 and changeable:
             changing = rng.sample(changeable, min(n_changes, len(changeable)))
@@ -1382,7 +1542,8 @@ def _apply_drift(
                 ra = ROLE_APP_AFFINITIES.get(new_role, common_apps)
                 all_apps = list(dict.fromkeys(ra + common_apps))
                 app_affinities[idx] = WeightedSampler(
-                    all_apps, zipf_weights(len(all_apps), s=0.8),
+                    all_apps,
+                    zipf_weights(len(all_apps), s=0.8),
                 )
 
     # --- New resources ---
@@ -1447,7 +1608,11 @@ def _generate_with_drift(
     active_indices = set(range(len(principals)))
 
     resource_affinities = build_principal_affinities(
-        cfg, principals, teams, resources, rng,
+        cfg,
+        principals,
+        teams,
+        resources,
+        rng,
     )
     app_affinities = build_app_affinities(principals, rng)
 
@@ -1521,7 +1686,11 @@ def generate_scaled_dataset(cfg: ScaleConfig | None = None) -> SyntheticDataset:
         all_events = _generate_with_drift(cfg, principals, teams, resources, rng)
     else:
         resource_affinities = build_principal_affinities(
-            cfg, principals, teams, resources, rng,
+            cfg,
+            principals,
+            teams,
+            resources,
+            rng,
         )
         app_affinities = build_app_affinities(principals, rng)
 
@@ -1531,8 +1700,13 @@ def generate_scaled_dataset(cfg: ScaleConfig | None = None) -> SyntheticDataset:
         for day_offset in range(cfg.num_days):
             day = cfg.start_date + timedelta(days=day_offset)
             day_events = _generate_day_events(
-                day, principals, resource_affinities, app_affinities,
-                cfg, rng, counter,
+                day,
+                principals,
+                resource_affinities,
+                app_affinities,
+                cfg,
+                rng,
+                counter,
             )
             all_events.extend(day_events)
 
@@ -1540,7 +1714,12 @@ def generate_scaled_dataset(cfg: ScaleConfig | None = None) -> SyntheticDataset:
 
     if cfg.inject_scenarios:
         all_events, expectations = inject_scenarios(
-            cfg, principals, teams, resources, all_events, rng,
+            cfg,
+            principals,
+            teams,
+            resources,
+            all_events,
+            rng,
         )
     else:
         expectations = {}

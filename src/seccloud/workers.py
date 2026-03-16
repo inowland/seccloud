@@ -197,7 +197,11 @@ def _empty_ingest_result(workspace: Workspace) -> dict[str, Any]:
     }
 
 
-def run_normalization_worker(workspace: Workspace, max_batches: int | None = None, dsn: str | None = None) -> dict[str, Any]:
+def run_normalization_worker(
+    workspace: Workspace,
+    max_batches: int | None = None,
+    dsn: str | None = None,
+) -> dict[str, Any]:
     workspace.bootstrap()
     pending_batches = workspace.list_pending_intake_batches()
     if max_batches is not None:
@@ -261,7 +265,11 @@ def run_detection_worker(workspace: Workspace) -> dict[str, Any]:
     return {"detect": detect, "ops_metadata": ops}
 
 
-def run_local_processing_workers(workspace: Workspace, max_batches: int | None = None, dsn: str | None = None) -> dict[str, Any]:
+def run_local_processing_workers(
+    workspace: Workspace,
+    max_batches: int | None = None,
+    dsn: str | None = None,
+) -> dict[str, Any]:
     normalization = run_normalization_worker(workspace, max_batches=max_batches, dsn=dsn)
     detection = run_detection_worker(workspace)
     return {

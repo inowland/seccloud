@@ -146,9 +146,15 @@ def get_event_detail(workspace: Workspace, event_id: str, dsn: str | None = None
 
 def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
     detection = workspace.get_detection(detection_id)
-    anchor_event = get_event_detail(
-        workspace, detection["event_ids"][0], dsn=dsn,
-    ) if detection.get("event_ids") else None
+    anchor_event = (
+        get_event_detail(
+            workspace,
+            detection["event_ids"][0],
+            dsn=dsn,
+        )
+        if detection.get("event_ids")
+        else None
+    )
     if anchor_event is None:
         return {
             "principal_id": detection.get("related_entity_ids", ["unknown"])[0],
@@ -189,35 +195,55 @@ def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | No
 
 
 def _peer_counts_from_postgres(
-    dsn: str, tenant_id: str, principal_id: str, peer_group: str, resource_id: str,
+    dsn: str,
+    tenant_id: str,
+    principal_id: str,
+    peer_group: str,
+    resource_id: str,
 ) -> dict[str, Any] | None:
     """Query hot_event_index for live peer comparison counts."""
     try:
         import psycopg
         from psycopg.rows import dict_row
+
         from seccloud.projection_store import HOT_EVENT_INDEX_TABLE, _tbl
 
         hei = _tbl(HOT_EVENT_INDEX_TABLE)
         with psycopg.connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
-                cur.execute(psycopg.sql.SQL(
-                    "select count(*) as n from {hei} where tenant_id = %s and principal_id = %s"
-                ).format(hei=hei), (tenant_id, principal_id))
+                cur.execute(
+                    psycopg.sql.SQL(
+                        "select count(*) as n from {hei} where tenant_id = %s and principal_id = %s"
+                    ).format(hei=hei),
+                    (tenant_id, principal_id),
+                )
                 total_events = cur.fetchone()["n"]
 
-                cur.execute(psycopg.sql.SQL(
-                    "select count(*) as n from {hei} where tenant_id = %s and principal_id = %s and resource_id = %s"
-                ).format(hei=hei), (tenant_id, principal_id, resource_id))
+                cur.execute(
+                    psycopg.sql.SQL(
+                        "select count(*) as n from {hei}"
+                        " where tenant_id = %s and principal_id = %s and resource_id = %s"
+                    ).format(hei=hei),
+                    (tenant_id, principal_id, resource_id),
+                )
                 prior_access = cur.fetchone()["n"]
 
-                cur.execute(psycopg.sql.SQL(
-                    "select count(*) as n from {hei} where tenant_id = %s and principal_department = %s and resource_id = %s"
-                ).format(hei=hei), (tenant_id, peer_group, resource_id))
+                cur.execute(
+                    psycopg.sql.SQL(
+                        "select count(*) as n from {hei}"
+                        " where tenant_id = %s and principal_department = %s and resource_id = %s"
+                    ).format(hei=hei),
+                    (tenant_id, peer_group, resource_id),
+                )
                 peer_access = cur.fetchone()["n"]
 
-                cur.execute(psycopg.sql.SQL(
-                    "select count(distinct principal_id) as n from {hei} where tenant_id = %s and principal_department = %s"
-                ).format(hei=hei), (tenant_id, peer_group))
+                cur.execute(
+                    psycopg.sql.SQL(
+                        "select count(distinct principal_id) as n from {hei}"
+                        " where tenant_id = %s and principal_department = %s"
+                    ).format(hei=hei),
+                    (tenant_id, peer_group),
+                )
                 peer_count = cur.fetchone()["n"]
 
         return {

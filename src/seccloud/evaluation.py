@@ -32,13 +32,11 @@ from seccloud.contrastive_model import (
     config_from_features,
     tensorize_action,
     tensorize_context,
-    train,
 )
 from seccloud.feature_pipeline import FeatureSet, build_features
 from seccloud.synthetic_scale import (
     SCENARIO_NAMES,
     OrgPrincipal,
-    OrgTeam,
 )
 
 # ---------------------------------------------------------------------------
@@ -115,8 +113,12 @@ def score_principal(
 
     ctx = feature_set.contexts[principal_idx]
     ctx_t = tensorize_context(
-        ctx, feature_set.resource_vocab, cat_vocabs,
-        max_win, max_res, max_peers,
+        ctx,
+        feature_set.resource_vocab,
+        cat_vocabs,
+        max_win,
+        max_res,
+        max_peers,
     )
     ctx_batch = {k: v.unsqueeze(0).to(device) for k, v in ctx_t.items()}
     ctx_emb = model.encode_context(ctx_batch)  # [1, d]
@@ -191,9 +193,11 @@ def temporal_spatial_split(
     """
     if start_date is None:
         timestamps = [e.get("observed_at", "") for e in events if e.get("observed_at")]
-        start_date = datetime.fromisoformat(
-            min(timestamps).replace("Z", "+00:00")
-        ) if timestamps else datetime(2026, 1, 1, tzinfo=UTC)
+        start_date = (
+            datetime.fromisoformat(min(timestamps).replace("Z", "+00:00"))
+            if timestamps
+            else datetime(2026, 1, 1, tzinfo=UTC)
+        )
 
     split_date = start_date + timedelta(days=train_days)
     split_str = split_date.isoformat()
@@ -264,8 +268,8 @@ class ScenarioMetrics:
     scenario: str
     roc_auc: float
     pr_auc: float
-    tpr_at_fpr_01: float    # TPR at FPR = 0.1%
-    tpr_at_fpr_001: float   # TPR at FPR = 0.01%
+    tpr_at_fpr_01: float  # TPR at FPR = 0.1%
+    tpr_at_fpr_001: float  # TPR at FPR = 0.01%
     num_attack_principals: int
     num_benign_principals: int
 
@@ -295,24 +299,23 @@ def _compute_padding_limits(feature_set: FeatureSet, config: ModelConfig) -> dic
     )
     max_peers = min(
         max(
-            (max(
-                len(c.peers.department_peers),
-                len(c.peers.manager_peers),
-                len(c.peers.group_peers),
-                len(c.collaboration.co_access),
-                1,
-            ) for c in feature_set.contexts.values()),
+            (
+                max(
+                    len(c.peers.department_peers),
+                    len(c.peers.manager_peers),
+                    len(c.peers.group_peers),
+                    len(c.collaboration.co_access),
+                    1,
+                )
+                for c in feature_set.contexts.values()
+            ),
             default=1,
         ),
         config.max_peers,
     )
     hist_lens = [len(c.history) for c in feature_set.contexts.values()]
     max_win = max(1, min(max(hist_lens, default=1), config.max_history_windows))
-    res_lens = [
-        len(hw.resource_ids)
-        for c in feature_set.contexts.values()
-        for hw in c.history
-    ]
+    res_lens = [len(hw.resource_ids) for c in feature_set.contexts.values() for hw in c.history]
     max_res = max(1, min(max(res_lens, default=1), config.max_res_per_window))
     return {"max_act": max_act, "max_win": max_win, "max_res": max_res, "max_peers": max_peers}
 
@@ -355,10 +358,17 @@ def score_all_principals(
     scores: dict[int, float] = {}
     for pidx, action_set in principal_actions.items():
         scores[pidx] = score_principal(
-            model, pidx, list(action_set), feature_set, cat_vocabs,
-            limits["max_act"], limits["max_win"], limits["max_res"],
+            model,
+            pidx,
+            list(action_set),
+            feature_set,
+            cat_vocabs,
+            limits["max_act"],
+            limits["max_win"],
+            limits["max_res"],
             limits["max_peers"],
-            delta=delta, device=device,
+            delta=delta,
+            device=device,
         )
 
     return scores
@@ -423,9 +433,13 @@ def evaluate(
 
         if n_pos == 0 or n_neg == 0:
             per_scenario[scenario] = ScenarioMetrics(
-                scenario=scenario, roc_auc=0.0, pr_auc=0.0,
-                tpr_at_fpr_01=0.0, tpr_at_fpr_001=0.0,
-                num_attack_principals=n_pos, num_benign_principals=n_neg,
+                scenario=scenario,
+                roc_auc=0.0,
+                pr_auc=0.0,
+                tpr_at_fpr_01=0.0,
+                tpr_at_fpr_001=0.0,
+                num_attack_principals=n_pos,
+                num_benign_principals=n_neg,
             )
             continue
 
@@ -519,8 +533,7 @@ def run_m0_evaluation(
 
     # 1. Generate data
     if verbose:
-        print(f"Generating synthetic data: {cfg.num_principals} principals, "
-              f"{cfg.num_days} days...")
+        print(f"Generating synthetic data: {cfg.num_principals} principals, {cfg.num_days} days...")
     scale_cfg = ScaleConfig(
         num_principals=cfg.num_principals,
         num_days=cfg.num_days,
@@ -534,27 +547,27 @@ def run_m0_evaluation(
 
     # Reconstruct org for feature engineering
     import random as stdlib_random
+
     from seccloud.synthetic_scale import generate_org
+
     rng = stdlib_random.Random(scale_cfg.seed)
     principals, teams = generate_org(scale_cfg, rng)
     email_to_idx = {p.email: p.idx for p in principals}
 
     # 2. Split
     if verbose:
-        print(f"Splitting: {cfg.train_days} train days, "
-              f"{cfg.spatial_holdout:.0%} spatial holdout...")
+        print(f"Splitting: {cfg.train_days} train days, {cfg.spatial_holdout:.0%} spatial holdout...")
     split = temporal_spatial_split(
-        events, principals,
+        events,
+        principals,
         train_days=cfg.train_days,
         start_date=scale_cfg.start_date,
         spatial_holdout=cfg.spatial_holdout,
         seed=cfg.seed,
     )
     if verbose:
-        print(f"  Train: {len(split.train_events)} events, "
-              f"{len(split.train_principal_indices)} principals")
-        print(f"  Test:  {len(split.test_events)} events, "
-              f"{len(split.test_principal_indices)} principals")
+        print(f"  Train: {len(split.train_events)} events, {len(split.train_principal_indices)} principals")
+        print(f"  Test:  {len(split.test_events)} events, {len(split.test_principal_indices)} principals")
 
     # 3. Feature engineering on ALL events (action features need full history,
     #    but training pairs are filtered to train principals + train period)
@@ -567,13 +580,9 @@ def run_m0_evaluation(
     if verbose:
         print("Building training pairs...")
     all_pairs = build_training_pairs(fs)
-    train_pairs = [
-        p for p in all_pairs
-        if p.principal_idx in split.train_principal_indices
-    ]
+    train_pairs = [p for p in all_pairs if p.principal_idx in split.train_principal_indices]
     if verbose:
-        print(f"  {len(train_pairs)} training pairs "
-              f"(from {len(all_pairs)} total)")
+        print(f"  {len(train_pairs)} training pairs (from {len(all_pairs)} total)")
 
     model_cfg = config_from_features(
         fs,
@@ -594,13 +603,18 @@ def run_m0_evaluation(
         print(f"Training for {cfg.epochs} epochs...")
     ds = FacadeDataset(fs, train_pairs, cat_vocabs, model_cfg, rng_seed=cfg.seed)
     from torch.utils.data import DataLoader
+
     loader = DataLoader(
-        ds, batch_size=model_cfg.batch_size, shuffle=True,
-        collate_fn=collate_facade, num_workers=0,
+        ds,
+        batch_size=model_cfg.batch_size,
+        shuffle=True,
+        collate_fn=collate_facade,
+        num_workers=0,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=model_cfg.learning_rate)
 
     from seccloud.contrastive_model import train_epoch
+
     for epoch in range(cfg.epochs):
         loss = train_epoch(model, loader, optimizer, model_cfg, device)
         if verbose:
@@ -610,15 +624,22 @@ def run_m0_evaluation(
     if verbose:
         print("Scoring test principals...")
     principal_scores = score_all_principals(
-        model, split.test_events, fs, cat_vocabs, model_cfg,
-        email_to_idx, delta=cfg.delta, device=device,
+        model,
+        split.test_events,
+        fs,
+        cat_vocabs,
+        model_cfg,
+        email_to_idx,
+        delta=cfg.delta,
+        device=device,
     )
     if verbose:
         print(f"  Scored {len(principal_scores)} principals")
 
     # 6. Evaluate
     attack_principals = _identify_attack_principals(
-        split.test_events, email_to_idx,
+        split.test_events,
+        email_to_idx,
     )
     if verbose:
         for scenario, pidxs in attack_principals.items():
@@ -637,7 +658,6 @@ def run_m0_evaluation(
             print(f"    PR AUC:  {m.pr_auc:.4f}")
             print(f"    TPR@0.1% FPR: {m.tpr_at_fpr_01:.4f}")
             print(f"    TPR@0.01% FPR: {m.tpr_at_fpr_001:.4f}")
-            print(f"    Attackers: {m.num_attack_principals}, "
-                  f"Benign: {m.num_benign_principals}")
+            print(f"    Attackers: {m.num_attack_principals}, Benign: {m.num_benign_principals}")
 
     return result

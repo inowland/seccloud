@@ -76,17 +76,19 @@ def _build_legacy_source_events() -> tuple[list[dict[str, Any]], dict[str, bool]
 def _normalized_event_count(workspace: Workspace) -> int:
     """Get the count of normalized events, preferring postgres over manifest."""
     try:
-        from seccloud.local_postgres import local_postgres_dsn
-        from seccloud.projection_store import HOT_EVENT_INDEX_TABLE, _tbl, default_projection_dsn
         import psycopg
         from psycopg.rows import dict_row
+
+        from seccloud.projection_store import HOT_EVENT_INDEX_TABLE, _tbl, default_projection_dsn
+
         dsn = default_projection_dsn()
         with psycopg.connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 hei = _tbl(HOT_EVENT_INDEX_TABLE)
-                cur.execute(psycopg.sql.SQL(
-                    "select count(*) as n from {hei} where tenant_id = %s"
-                ).format(hei=hei), (workspace.tenant_id,))
+                cur.execute(
+                    psycopg.sql.SQL("select count(*) as n from {hei} where tenant_id = %s").format(hei=hei),
+                    (workspace.tenant_id,),
+                )
                 return cur.fetchone()["n"]
     except Exception:
         return len(workspace.load_ingest_manifest().get("normalized_event_ids", []))
@@ -94,19 +96,26 @@ def _normalized_event_count(workspace: Workspace) -> int:
 
 def _active_detection_count(workspace: Workspace) -> int:
     try:
-        from seccloud.projection_store import (
-            PROJECTED_DETECTIONS_TABLE, _tbl, default_projection_dsn,
-        )
         import psycopg
         from psycopg.rows import dict_row
+
+        from seccloud.projection_store import (
+            PROJECTED_DETECTIONS_TABLE,
+            _tbl,
+            default_projection_dsn,
+        )
+
         dsn = default_projection_dsn()
         with psycopg.connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 pd = _tbl(PROJECTED_DETECTIONS_TABLE)
-                cur.execute(psycopg.sql.SQL(
-                    "select count(*) as n from {pd} where tenant_id = %s "
-                    "and coalesce(payload->>'status', 'open') = 'open'"
-                ).format(pd=pd), (workspace.tenant_id,))
+                cur.execute(
+                    psycopg.sql.SQL(
+                        "select count(*) as n from {pd} where tenant_id = %s "
+                        "and coalesce(payload->>'status', 'open') = 'open'"
+                    ).format(pd=pd),
+                    (workspace.tenant_id,),
+                )
                 return cur.fetchone()["n"]
     except Exception:
         return sum(1 for d in workspace.list_detections() if d.get("status", "open") == "open")
@@ -153,7 +162,11 @@ def initialize_runtime_stream(
         rng = random.Random(seed)
         principals, teams = generate_org(cfg, rng)
         detections = precompute_detections(
-            source_events, principals, teams, epochs=10, seed=seed,
+            source_events,
+            principals,
+            teams,
+            epochs=10,
+            seed=seed,
         )
         write_json(
             workspace.manifests_dir / "precomputed_detections.json",
@@ -193,7 +206,6 @@ def reset_stream_cursor(workspace: Workspace) -> dict[str, Any]:
     import shutil
 
     source_path = workspace.manifests_dir / "runtime_stream_source_events.json"
-    precomputed_path = workspace.manifests_dir / "precomputed_detections.json"
 
     if not source_path.exists():
         return {

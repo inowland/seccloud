@@ -10,7 +10,7 @@ import json
 import random
 import sys
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -43,7 +43,6 @@ from seccloud.feature_pipeline import (
     build_features,
 )
 from seccloud.synthetic_scale import (
-    SCENARIO_NAMES,
     ScaleConfig,
     generate_org,
     generate_scaled_dataset,
@@ -66,7 +65,8 @@ def _train_and_evaluate(
     """Train a model on features and evaluate. Returns (result, losses)."""
     cat_vocabs = build_categorical_vocabs(fs)
     split = temporal_spatial_split(
-        events, principals,
+        events,
+        principals,
         train_days=train_days,
         start_date=start_date,
         spatial_holdout=0.5,
@@ -78,16 +78,25 @@ def _train_and_evaluate(
 
     cfg = config_from_features(
         fs,
-        embed_dim=embed_dim, token_dim=32, static_embed_dim=8,
-        action_hidden=[256, 128], context_hidden=[256, 128],
-        n_positive=10, batch_size=512, learning_rate=3e-4, epochs=epochs,
+        embed_dim=embed_dim,
+        token_dim=32,
+        static_embed_dim=8,
+        action_hidden=[256, 128],
+        context_hidden=[256, 128],
+        n_positive=10,
+        batch_size=512,
+        learning_rate=3e-4,
+        epochs=epochs,
     )
 
     model = FacadeModel(cfg).to(DEVICE)
     ds = FacadeDataset(fs, train_pairs, cat_vocabs, cfg, rng_seed=SEED)
     loader = torch.utils.data.DataLoader(
-        ds, batch_size=cfg.batch_size, shuffle=True,
-        collate_fn=collate_facade, num_workers=0,
+        ds,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        collate_fn=collate_facade,
+        num_workers=0,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
@@ -98,8 +107,14 @@ def _train_and_evaluate(
 
     email_to_idx = {p.email: p.idx for p in principals}
     scores = score_all_principals(
-        model, split.test_events, fs, cat_vocabs, cfg,
-        email_to_idx, delta=0.3, device=DEVICE,
+        model,
+        split.test_events,
+        fs,
+        cat_vocabs,
+        cfg,
+        email_to_idx,
+        delta=0.3,
+        device=DEVICE,
     )
     attack = _identify_attack_principals(split.test_events, email_to_idx)
     result = evaluate(scores, attack)
@@ -130,7 +145,9 @@ def ablate(fs: FeatureSet, ablation: str) -> FeatureSet:
 
 
 def run_ablation_study(
-    events: list, principals: list, teams: list,
+    events: list,
+    principals: list,
+    teams: list,
     start_date: datetime,
 ) -> dict[str, dict]:
     """Run full model + 6 ablation variants."""
@@ -154,14 +171,16 @@ def run_ablation_study(
     for name, fs in ablations:
         t0 = time.time()
         result, losses = _train_and_evaluate(
-            fs, events, principals,
-            start_date=start_date, epochs=20, label=name,
+            fs,
+            events,
+            principals,
+            start_date=start_date,
+            epochs=20,
+            label=name,
         )
         elapsed = time.time() - t0
 
-        scenario_aucs = {
-            s: m.roc_auc for s, m in result.per_scenario.items()
-        }
+        scenario_aucs = {s: m.roc_auc for s, m in result.per_scenario.items()}
         results[name] = {
             "aggregate_roc_auc": result.aggregate_roc_auc,
             "aggregate_pr_auc": result.aggregate_pr_auc,
@@ -170,8 +189,7 @@ def run_ablation_study(
             "elapsed_s": elapsed,
         }
 
-        print(f"\n  {name}: agg_roc={result.aggregate_roc_auc:.4f} "
-              f"({elapsed:.1f}s)")
+        print(f"\n  {name}: agg_roc={result.aggregate_roc_auc:.4f} ({elapsed:.1f}s)")
         for s, auc in sorted(scenario_aucs.items()):
             print(f"    {s}: {auc:.4f}")
 
@@ -179,8 +197,11 @@ def run_ablation_study(
 
 
 def run_cold_start_study(
-    all_events: list, principals: list, teams: list,
-    start_date: datetime, total_days: int = 30,
+    all_events: list,
+    principals: list,
+    teams: list,
+    start_date: datetime,
+    total_days: int = 30,
 ) -> dict[int, dict]:
     """Evaluate detection quality with varying training history lengths."""
     print("\n" + "=" * 70)
@@ -204,7 +225,9 @@ def run_cold_start_study(
 
         t0 = time.time()
         result, losses = _train_and_evaluate(
-            fs, events, principals,
+            fs,
+            events,
+            principals,
             start_date=start_date,
             train_days=train_days,
             epochs=10,
@@ -219,8 +242,7 @@ def run_cold_start_study(
             "elapsed_s": elapsed,
         }
 
-        print(f"\n  {train_days} train days: agg_roc={result.aggregate_roc_auc:.4f} "
-              f"({elapsed:.1f}s)")
+        print(f"\n  {train_days} train days: agg_roc={result.aggregate_roc_auc:.4f} ({elapsed:.1f}s)")
         for s, auc in sorted(scenario_aucs.items()):
             print(f"    {s}: {auc:.4f}")
 
@@ -228,7 +250,9 @@ def run_cold_start_study(
 
 
 def run_embedding_dim_study(
-    events: list, principals: list, teams: list,
+    events: list,
+    principals: list,
+    teams: list,
     start_date: datetime,
 ) -> dict[int, dict]:
     """Compare embedding dimensions."""
@@ -243,8 +267,12 @@ def run_embedding_dim_study(
     for d in dims:
         t0 = time.time()
         result, losses = _train_and_evaluate(
-            fs, events, principals,
-            start_date=start_date, epochs=20, embed_dim=d,
+            fs,
+            events,
+            principals,
+            start_date=start_date,
+            epochs=20,
+            embed_dim=d,
             label=f"dim_{d}",
         )
         elapsed = time.time() - t0
@@ -257,8 +285,7 @@ def run_embedding_dim_study(
             "elapsed_s": elapsed,
         }
 
-        print(f"\n  d={d}: agg_roc={result.aggregate_roc_auc:.4f} "
-              f"loss={losses[-1]:.6f} ({elapsed:.1f}s)")
+        print(f"\n  d={d}: agg_roc={result.aggregate_roc_auc:.4f} loss={losses[-1]:.6f} ({elapsed:.1f}s)")
         for s, auc in sorted(scenario_aucs.items()):
             print(f"    {s}: {auc:.4f}")
 
@@ -273,7 +300,10 @@ def main():
     # (ablations measure relative impact, not absolute quality)
     print("Generating synthetic data (100 principals, 30 days)...")
     scale_cfg = ScaleConfig(
-        num_principals=100, num_days=30, seed=SEED, inject_scenarios=True,
+        num_principals=100,
+        num_days=30,
+        seed=SEED,
+        inject_scenarios=True,
     )
     dataset = generate_scaled_dataset(scale_cfg)
     events = dataset.raw_events

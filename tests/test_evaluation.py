@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 import sys
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -16,18 +15,12 @@ if str(SRC) not in sys.path:
 
 from seccloud.contrastive_model import (
     FacadeModel,
-    ModelConfig,
     build_categorical_vocabs,
-    build_training_pairs,
     config_from_features,
-    tensorize_action,
-    tensorize_context,
 )
 from seccloud.evaluation import (
-    DataSplit,
     EvaluationResult,
     M0EvalConfig,
-    ScenarioMetrics,
     _compute_padding_limits,
     _identify_attack_principals,
     evaluate,
@@ -46,15 +39,10 @@ from seccloud.feature_pipeline import (
     HistoryWindow,
     PeerFeatures,
     StaticFeatures,
-    build_features,
 )
 from seccloud.synthetic_scale import (
     OrgPrincipal,
-    OrgTeam,
-    ScaleConfig,
-    generate_org,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -63,9 +51,16 @@ from seccloud.synthetic_scale import (
 
 def _make_principal(idx: int, dept: str = "eng", role: str = "engineer") -> OrgPrincipal:
     return OrgPrincipal(
-        idx=idx, email=f"p{idx:05d}@example.com", name=f"P{idx}",
-        department=dept, team=f"{dept}-team-1", role=role,
-        location="US-NY", is_manager=False, manager_idx=None, tz_offset=-5.0,
+        idx=idx,
+        email=f"p{idx:05d}@example.com",
+        name=f"P{idx}",
+        department=dept,
+        team=f"{dept}-team-1",
+        role=role,
+        location="US-NY",
+        is_manager=False,
+        manager_idx=None,
+        tz_offset=-5.0,
     )
 
 
@@ -79,13 +74,16 @@ def _small_feature_set() -> FeatureSet:
     def _ctx(idx: int, role: str = "engineer") -> ContextFeatures:
         return ContextFeatures(
             principal_idx=idx,
-            history=[HistoryWindow(
-                window_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
-                resource_ids=frozenset({"doc-a"}),
-            )],
+            history=[
+                HistoryWindow(
+                    window_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+                    resource_ids=frozenset({"doc-a"}),
+                )
+            ],
             peers=PeerFeatures(
                 department_peers={j: 1.0 for j in range(5) if j != idx},
-                manager_peers={}, group_peers={},
+                manager_peers={},
+                group_peers={},
             ),
             collaboration=CollaborationFeatures({}),
             static=StaticFeatures(role, "1-3yr", "US-NY", "regular"),
@@ -93,8 +91,10 @@ def _small_feature_set() -> FeatureSet:
 
     contexts = {i: _ctx(i) for i in range(5)}
     return FeatureSet(
-        actions=actions, contexts=contexts,
-        principal_vocab_size=5, resource_vocab={"doc-a": 0, "doc-b": 1, "repo-x": 2},
+        actions=actions,
+        contexts=contexts,
+        principal_vocab_size=5,
+        resource_vocab={"doc-a": 0, "doc-b": 1, "repo-x": 2},
     )
 
 
@@ -154,8 +154,12 @@ class TestScorePrincipal(unittest.TestCase):
     def test_returns_float(self):
         fs = _small_feature_set()
         cfg = config_from_features(
-            fs, embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
+            fs,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
             sources=["gworkspace", "github"],
         )
         vocabs = build_categorical_vocabs(fs)
@@ -163,9 +167,15 @@ class TestScorePrincipal(unittest.TestCase):
         model.eval()
         limits = _compute_padding_limits(fs, cfg)
         score = score_principal(
-            model, 0, [("doc-a", "gworkspace"), ("repo-x", "github")],
-            fs, vocabs, limits["max_act"], limits["max_win"],
-            limits["max_res"], limits["max_peers"],
+            model,
+            0,
+            [("doc-a", "gworkspace"), ("repo-x", "github")],
+            fs,
+            vocabs,
+            limits["max_act"],
+            limits["max_win"],
+            limits["max_res"],
+            limits["max_peers"],
             device=torch.device("cpu"),
         )
         self.assertIsInstance(score, float)
@@ -174,8 +184,12 @@ class TestScorePrincipal(unittest.TestCase):
     def test_no_actions_returns_zero(self):
         fs = _small_feature_set()
         cfg = config_from_features(
-            fs, embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
+            fs,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
             sources=["gworkspace"],
         )
         vocabs = build_categorical_vocabs(fs)
@@ -183,26 +197,42 @@ class TestScorePrincipal(unittest.TestCase):
         model.eval()
         limits = _compute_padding_limits(fs, cfg)
         score = score_principal(
-            model, 0, [], fs, vocabs,
-            limits["max_act"], limits["max_win"],
-            limits["max_res"], limits["max_peers"],
+            model,
+            0,
+            [],
+            fs,
+            vocabs,
+            limits["max_act"],
+            limits["max_win"],
+            limits["max_res"],
+            limits["max_peers"],
         )
         self.assertEqual(score, 0.0)
 
     def test_missing_principal_returns_zero(self):
         fs = _small_feature_set()
         cfg = config_from_features(
-            fs, embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
+            fs,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
             sources=["gworkspace"],
         )
         vocabs = build_categorical_vocabs(fs)
         model = FacadeModel(cfg)
         limits = _compute_padding_limits(fs, cfg)
         score = score_principal(
-            model, 999, [("doc-a", "gworkspace")], fs, vocabs,
-            limits["max_act"], limits["max_win"],
-            limits["max_res"], limits["max_peers"],
+            model,
+            999,
+            [("doc-a", "gworkspace")],
+            fs,
+            vocabs,
+            limits["max_act"],
+            limits["max_win"],
+            limits["max_res"],
+            limits["max_peers"],
         )
         self.assertEqual(score, 0.0)
 
@@ -220,18 +250,22 @@ class TestTemporalSpatialSplit(unittest.TestCase):
         for d in range(30):
             ts = (base + timedelta(days=d)).isoformat()
             for i in range(5):
-                self.events.append({
-                    "observed_at": ts,
-                    "actor_email": f"p{i:05d}@example.com",
-                    "resource_id": f"doc-{d}",
-                    "source": "gworkspace",
-                    "scenario": "baseline",
-                })
+                self.events.append(
+                    {
+                        "observed_at": ts,
+                        "actor_email": f"p{i:05d}@example.com",
+                        "resource_id": f"doc-{d}",
+                        "source": "gworkspace",
+                        "scenario": "baseline",
+                    }
+                )
 
     def test_temporal_split_correct(self):
         split = temporal_spatial_split(
-            self.events, self.principals,
-            train_days=20, start_date=datetime(2026, 1, 1, tzinfo=UTC),
+            self.events,
+            self.principals,
+            train_days=20,
+            start_date=datetime(2026, 1, 1, tzinfo=UTC),
         )
         # Events in first 20 days -> train, rest -> test
         self.assertGreater(len(split.train_events), 0)
@@ -245,15 +279,18 @@ class TestTemporalSpatialSplit(unittest.TestCase):
 
     def test_spatial_holdout(self):
         split = temporal_spatial_split(
-            self.events, self.principals,
-            train_days=20, spatial_holdout=0.5,
+            self.events,
+            self.principals,
+            train_days=20,
+            spatial_holdout=0.5,
         )
         self.assertEqual(
             len(split.train_principal_indices) + len(split.test_principal_indices),
             len(self.principals),
         )
         self.assertEqual(
-            split.train_principal_indices & split.test_principal_indices, set(),
+            split.train_principal_indices & split.test_principal_indices,
+            set(),
         )
         # Approximately 50% holdout
         holdout_frac = len(split.test_principal_indices) / len(self.principals)
@@ -374,8 +411,12 @@ class TestScoreAllPrincipals(unittest.TestCase):
     def test_scores_active_principals(self):
         fs = _small_feature_set()
         cfg = config_from_features(
-            fs, embed_dim=8, token_dim=4, static_embed_dim=4,
-            action_hidden=[16], context_hidden=[16],
+            fs,
+            embed_dim=8,
+            token_dim=4,
+            static_embed_dim=4,
+            action_hidden=[16],
+            context_hidden=[16],
             sources=["gworkspace", "github"],
         )
         vocabs = build_categorical_vocabs(fs)
@@ -383,15 +424,28 @@ class TestScoreAllPrincipals(unittest.TestCase):
         model.eval()
 
         test_events = [
-            {"actor_email": "p00000@example.com", "resource_id": "doc-a",
-             "source": "gworkspace", "observed_at": "2026-01-20T10:00:00Z"},
-            {"actor_email": "p00001@example.com", "resource_id": "doc-b",
-             "source": "gworkspace", "observed_at": "2026-01-20T11:00:00Z"},
+            {
+                "actor_email": "p00000@example.com",
+                "resource_id": "doc-a",
+                "source": "gworkspace",
+                "observed_at": "2026-01-20T10:00:00Z",
+            },
+            {
+                "actor_email": "p00001@example.com",
+                "resource_id": "doc-b",
+                "source": "gworkspace",
+                "observed_at": "2026-01-20T11:00:00Z",
+            },
         ]
         email_to_idx = {f"p{i:05d}@example.com": i for i in range(5)}
 
         scores = score_all_principals(
-            model, test_events, fs, vocabs, cfg, email_to_idx,
+            model,
+            test_events,
+            fs,
+            vocabs,
+            cfg,
+            email_to_idx,
             device=torch.device("cpu"),
         )
         self.assertIn(0, scores)

@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -67,8 +66,12 @@ class TestExportModel(unittest.TestCase):
 
     def test_exported_dimensions_stored(self):
         exported = export_model(
-            self.model, self.tmpdir,
-            max_tokens=32, max_windows=16, max_res=8, max_peers=24,
+            self.model,
+            self.tmpdir,
+            max_tokens=32,
+            max_windows=16,
+            max_res=8,
+            max_peers=24,
         )
         self.assertEqual(exported.max_tokens, 32)
         self.assertEqual(exported.max_windows, 16)
@@ -120,8 +123,11 @@ class TestONNXContextTower(unittest.TestCase):
         self.model.eval()
         self.tmpdir = Path(tempfile.mkdtemp(prefix="seccloud-onnx-"))
         self.exported = export_model(
-            self.model, self.tmpdir,
-            max_windows=4, max_res=4, max_peers=6,
+            self.model,
+            self.tmpdir,
+            max_windows=4,
+            max_res=4,
+            max_peers=6,
         )
 
     def tearDown(self):
@@ -170,12 +176,14 @@ class TestValidateEquivalence(unittest.TestCase):
         try:
             exported = export_model(model, tmpdir)
             result = validate_equivalence(
-                model, exported, num_samples=20, tolerance=1e-5,
+                model,
+                exported,
+                num_samples=20,
+                tolerance=1e-5,
             )
             self.assertTrue(
                 result.all_passed,
-                f"Equivalence failed: action={result.action_max_diff}, "
-                f"context={result.context_max_diff}",
+                f"Equivalence failed: action={result.action_max_diff}, context={result.context_max_diff}",
             )
             for source, diff in result.action_max_diff.items():
                 self.assertLess(diff, 1e-5, f"{source} diff too large: {diff}")
@@ -192,11 +200,17 @@ class TestBenchmarkLatency(unittest.TestCase):
         tmpdir = Path(tempfile.mkdtemp(prefix="seccloud-onnx-"))
         try:
             exported = export_model(
-                model, tmpdir,
-                max_tokens=16, max_windows=8, max_res=4, max_peers=8,
+                model,
+                tmpdir,
+                max_tokens=16,
+                max_windows=8,
+                max_res=4,
+                max_peers=8,
             )
             result = benchmark_latency(
-                exported, num_warmup=3, num_iterations=10,
+                exported,
+                num_warmup=3,
+                num_iterations=10,
             )
             for source, latency in result.action_latency_ms.items():
                 self.assertGreater(latency, 0, f"{source} latency not positive")

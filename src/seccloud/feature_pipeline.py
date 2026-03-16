@@ -229,8 +229,7 @@ def _build_history_profiles(
     profiles: dict[int, list[HistoryWindow]] = {}
     for idx, wmap in windows.items():
         profiles[idx] = [
-            HistoryWindow(window_start=ws, resource_ids=frozenset(rids))
-            for ws, rids in sorted(wmap.items())
+            HistoryWindow(window_start=ws, resource_ids=frozenset(rids)) for ws, rids in sorted(wmap.items())
         ]
     return profiles
 
@@ -347,10 +346,7 @@ def _build_collaboration_features(
                 collab[idx_i][idx_j] += w
                 collab[idx_j][idx_i] += w
 
-    return {
-        idx: CollaborationFeatures(co_access=dict(collab.get(idx, {})))
-        for idx in range(num_principals)
-    }
+    return {idx: CollaborationFeatures(co_access=dict(collab.get(idx, {}))) for idx in range(num_principals)}
 
 
 # ---------------------------------------------------------------------------
@@ -511,17 +507,21 @@ def write_parquet(features: FeatureSet, output_dir: Path) -> dict[str, Path]:
     for ctx in features.contexts.values():
         for hw in ctx.history:
             for rid in hw.resource_ids:
-                rows.append({
-                    "principal_idx": ctx.principal_idx,
-                    "window_start": hw.window_start.isoformat(),
-                    "resource_id": rid,
-                })
+                rows.append(
+                    {
+                        "principal_idx": ctx.principal_idx,
+                        "window_start": hw.window_start.isoformat(),
+                        "resource_id": rid,
+                    }
+                )
     p = output_dir / "history.parquet"
-    empty_hist = pa.table({
-        "principal_idx": pa.array([], pa.int64()),
-        "window_start": pa.array([], pa.utf8()),
-        "resource_id": pa.array([], pa.utf8()),
-    })
+    empty_hist = pa.table(
+        {
+            "principal_idx": pa.array([], pa.int64()),
+            "window_start": pa.array([], pa.utf8()),
+            "resource_id": pa.array([], pa.utf8()),
+        }
+    )
     pq.write_table(pa.Table.from_pylist(rows) if rows else empty_hist, p)
     paths["history"] = p
 
@@ -554,13 +554,15 @@ def write_parquet(features: FeatureSet, output_dir: Path) -> dict[str, Path]:
     rows = []
     for ctx in features.contexts.values():
         s = ctx.static
-        rows.append({
-            "principal_idx": ctx.principal_idx,
-            "role": s.role,
-            "duration_bucket": s.employment_duration_bucket,
-            "location": s.location,
-            "privilege": s.privilege_level,
-        })
+        rows.append(
+            {
+                "principal_idx": ctx.principal_idx,
+                "role": s.role,
+                "duration_bucket": s.employment_duration_bucket,
+                "location": s.location,
+                "privilege": s.privilege_level,
+            }
+        )
     p = output_dir / "static.parquet"
     pq.write_table(pa.Table.from_pylist(rows), p)
     paths["static"] = p

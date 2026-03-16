@@ -31,7 +31,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import torch
@@ -204,7 +203,11 @@ def export_model(
     ctx_wrapper = ContextTowerONNX(model.context_tower)
     ctx_wrapper.eval()
     ctx_example = _context_example(
-        config, batch=1, max_win=max_windows, max_res=max_res, max_peers=max_peers,
+        config,
+        batch=1,
+        max_win=max_windows,
+        max_res=max_res,
+        max_peers=max_peers,
     )
     ctx_path = output_dir / "context_tower.onnx"
     batch_dim = torch.export.Dim("batch", min=1)
@@ -213,9 +216,16 @@ def export_model(
         ctx_example,
         str(ctx_path),
         input_names=[
-            "hist_window_indices", "hist_window_mask", "hist_num_windows",
-            "peer_indices", "peer_weights", "peer_mask",
-            "role", "location", "duration", "privilege",
+            "hist_window_indices",
+            "hist_window_mask",
+            "hist_num_windows",
+            "peer_indices",
+            "peer_weights",
+            "peer_mask",
+            "role",
+            "location",
+            "duration",
+            "privilege",
         ],
         output_names=["embedding"],
         dynamic_shapes={
@@ -254,8 +264,10 @@ class ONNXActionTower:
 
     def __init__(self, path: Path) -> None:
         import onnxruntime as ort
+
         self.session = ort.InferenceSession(
-            str(path), providers=["CPUExecutionProvider"],
+            str(path),
+            providers=["CPUExecutionProvider"],
         )
 
     def __call__(
@@ -279,15 +291,22 @@ class ONNXContextTower:
 
     def __init__(self, path: Path) -> None:
         import onnxruntime as ort
+
         self.session = ort.InferenceSession(
-            str(path), providers=["CPUExecutionProvider"],
+            str(path),
+            providers=["CPUExecutionProvider"],
         )
 
     def __call__(self, **kwargs: np.ndarray) -> np.ndarray:
         feed = {}
         int_keys = {
-            "hist_window_indices", "hist_num_windows",
-            "peer_indices", "role", "location", "duration", "privilege",
+            "hist_window_indices",
+            "hist_num_windows",
+            "peer_indices",
+            "role",
+            "location",
+            "duration",
+            "privilege",
         }
         bool_keys = {"hist_window_mask", "peer_mask"}
         for k, v in kwargs.items():
@@ -342,7 +361,9 @@ def validate_equivalence(
             example = _action_example(config, batch=1, max_tokens=exported.max_tokens)
             pt_out = model.action_towers[source](*example).numpy()
             ort_out = ort_tower(
-                example[0].numpy(), example[1].numpy(), example[2].numpy(),
+                example[0].numpy(),
+                example[1].numpy(),
+                example[2].numpy(),
             )
             diff = float(np.abs(pt_out - ort_out).max())
             max_diff = max(max_diff, diff)
@@ -352,7 +373,8 @@ def validate_equivalence(
     ctx_max_diff = 0.0
     for _ in range(num_samples):
         example = _context_example(
-            config, batch=1,
+            config,
+            batch=1,
             max_win=exported.max_windows,
             max_res=exported.max_res_per_window,
             max_peers=exported.max_peers,
@@ -420,8 +442,10 @@ def benchmark_latency(
     for source, path in exported.action_tower_paths.items():
         ort_tower = ONNXActionTower(path)
         indices = np.random.randint(
-            0, config.principal_vocab_size + 1,
-            (1, exported.max_tokens), dtype=np.int64,
+            0,
+            config.principal_vocab_size + 1,
+            (1, exported.max_tokens),
+            dtype=np.int64,
         )
         weights = np.random.rand(1, exported.max_tokens).astype(np.float32)
         mask = np.ones((1, exported.max_tokens), dtype=bool)
@@ -439,16 +463,21 @@ def benchmark_latency(
     ort_ctx = ONNXContextTower(exported.context_tower_path)
     ctx_kwargs = {
         "hist_window_indices": np.random.randint(
-            0, config.resource_vocab_size + 1,
-            (1, exported.max_windows, exported.max_res_per_window), dtype=np.int64,
+            0,
+            config.resource_vocab_size + 1,
+            (1, exported.max_windows, exported.max_res_per_window),
+            dtype=np.int64,
         ),
         "hist_window_mask": np.ones(
-            (1, exported.max_windows, exported.max_res_per_window), dtype=bool,
+            (1, exported.max_windows, exported.max_res_per_window),
+            dtype=bool,
         ),
         "hist_num_windows": np.array([exported.max_windows], dtype=np.int64),
         "peer_indices": np.random.randint(
-            0, config.principal_vocab_size + 1,
-            (1, 4, exported.max_peers), dtype=np.int64,
+            0,
+            config.principal_vocab_size + 1,
+            (1, 4, exported.max_peers),
+            dtype=np.int64,
         ),
         "peer_weights": np.random.rand(1, 4, exported.max_peers).astype(np.float32),
         "peer_mask": np.ones((1, 4, exported.max_peers), dtype=bool),

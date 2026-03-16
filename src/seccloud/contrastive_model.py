@@ -128,8 +128,8 @@ def config_from_features(fs: FeatureSet, **overrides: Any) -> ModelConfig:
 
 def weighted_sum_pool(
     embeddings: torch.Tensor,  # [batch, max_tokens, dim]
-    weights: torch.Tensor,     # [batch, max_tokens]
-    mask: torch.Tensor,        # [batch, max_tokens] bool
+    weights: torch.Tensor,  # [batch, max_tokens]
+    mask: torch.Tensor,  # [batch, max_tokens] bool
 ) -> torch.Tensor:
     """Weighted sum pooling with mask.  Returns zero vector for empty sets."""
     w = weights * mask.float()
@@ -151,7 +151,9 @@ class ActionTower(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.token_embed = nn.Embedding(
-            config.principal_vocab_size + 1, config.token_dim, padding_idx=0,
+            config.principal_vocab_size + 1,
+            config.token_dim,
+            padding_idx=0,
         )
         layers: list[nn.Module] = []
         in_dim = config.token_dim
@@ -163,9 +165,9 @@ class ActionTower(nn.Module):
 
     def forward(
         self,
-        indices: torch.Tensor,   # [batch, max_tokens]
-        weights: torch.Tensor,   # [batch, max_tokens]
-        mask: torch.Tensor,      # [batch, max_tokens] bool
+        indices: torch.Tensor,  # [batch, max_tokens]
+        weights: torch.Tensor,  # [batch, max_tokens]
+        mask: torch.Tensor,  # [batch, max_tokens] bool
     ) -> torch.Tensor:
         emb = self.token_embed(indices)
         pooled = weighted_sum_pool(emb, weights, mask)
@@ -188,26 +190,27 @@ class HistoryEncoder(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.resource_embed = nn.Embedding(
-            config.resource_vocab_size + 1, config.token_dim, padding_idx=0,
+            config.resource_vocab_size + 1,
+            config.token_dim,
+            padding_idx=0,
         )
         self.output_dim = config.token_dim
 
     def forward(
         self,
         window_indices: torch.Tensor,  # [batch, max_win, max_res]
-        window_mask: torch.Tensor,     # [batch, max_win, max_res] bool
-        num_windows: torch.Tensor,     # [batch]
+        window_mask: torch.Tensor,  # [batch, max_win, max_res] bool
+        num_windows: torch.Tensor,  # [batch]
     ) -> torch.Tensor:
         _batch, max_w, _max_r = window_indices.shape
-        emb = self.resource_embed(window_indices)        # [B, W, R, d]
-        wm = window_mask.float().unsqueeze(-1)           # [B, W, R, 1]
-        w_sum = (emb * wm).sum(dim=2)                    # [B, W, d]
+        emb = self.resource_embed(window_indices)  # [B, W, R, d]
+        wm = window_mask.float().unsqueeze(-1)  # [B, W, R, 1]
+        w_sum = (emb * wm).sum(dim=2)  # [B, W, d]
         w_cnt = window_mask.float().sum(dim=2).clamp(min=1).unsqueeze(-1)
-        w_repr = w_sum / w_cnt                           # [B, W, d]
+        w_repr = w_sum / w_cnt  # [B, W, d]
         # Mask padding windows, mean pool across time
         device = num_windows.device
-        has_w = (torch.arange(max_w, device=device).unsqueeze(0)
-                 < num_windows.unsqueeze(1)).float()
+        has_w = (torch.arange(max_w, device=device).unsqueeze(0) < num_windows.unsqueeze(1)).float()
         masked = w_repr * has_w.unsqueeze(-1)
         return masked.sum(dim=1) / num_windows.float().clamp(min=1).unsqueeze(-1)
 
@@ -224,15 +227,17 @@ class PeerEncoder(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.peer_embed = nn.Embedding(
-            config.principal_vocab_size + 1, config.token_dim, padding_idx=0,
+            config.principal_vocab_size + 1,
+            config.token_dim,
+            padding_idx=0,
         )
         self.output_dim = self.NUM_GROUPS * config.token_dim
 
     def forward(
         self,
-        indices: torch.Tensor,   # [batch, 4, max_peers]
-        weights: torch.Tensor,   # [batch, 4, max_peers]
-        mask: torch.Tensor,      # [batch, 4, max_peers] bool
+        indices: torch.Tensor,  # [batch, 4, max_peers]
+        weights: torch.Tensor,  # [batch, 4, max_peers]
+        mask: torch.Tensor,  # [batch, 4, max_peers] bool
     ) -> torch.Tensor:
         B, G, P = indices.shape
         emb = self.peer_embed(indices.reshape(B * G, P))
@@ -263,12 +268,15 @@ class StaticEncoder(nn.Module):
         duration: torch.Tensor,
         privilege: torch.Tensor,
     ) -> torch.Tensor:
-        return torch.cat([
-            self.role_embed(role),
-            self.location_embed(location),
-            self.duration_embed(duration),
-            self.privilege_embed(privilege),
-        ], dim=-1)
+        return torch.cat(
+            [
+                self.role_embed(role),
+                self.location_embed(location),
+                self.duration_embed(duration),
+                self.privilege_embed(privilege),
+            ],
+            dim=-1,
+        )
 
 
 class ContextTower(nn.Module):
@@ -279,11 +287,7 @@ class ContextTower(nn.Module):
         self.history_enc = HistoryEncoder(config)
         self.peer_enc = PeerEncoder(config)
         self.static_enc = StaticEncoder(config)
-        in_dim = (
-            self.history_enc.output_dim
-            + self.peer_enc.output_dim
-            + self.static_enc.output_dim
-        )
+        in_dim = self.history_enc.output_dim + self.peer_enc.output_dim + self.static_enc.output_dim
         layers: list[nn.Module] = []
         for h in config.context_hidden:
             layers.extend([nn.Linear(in_dim, h), nn.ReLU()])
@@ -293,14 +297,20 @@ class ContextTower(nn.Module):
 
     def forward(self, ctx: dict[str, torch.Tensor]) -> torch.Tensor:
         h = self.history_enc(
-            ctx["hist_window_indices"], ctx["hist_window_mask"],
+            ctx["hist_window_indices"],
+            ctx["hist_window_mask"],
             ctx["hist_num_windows"],
         )
         p = self.peer_enc(
-            ctx["peer_indices"], ctx["peer_weights"], ctx["peer_mask"],
+            ctx["peer_indices"],
+            ctx["peer_weights"],
+            ctx["peer_mask"],
         )
         s = self.static_enc(
-            ctx["role"], ctx["location"], ctx["duration"], ctx["privilege"],
+            ctx["role"],
+            ctx["location"],
+            ctx["duration"],
+            ctx["privilege"],
         )
         return F.normalize(self.mlp(torch.cat([h, p, s], dim=-1)), p=2, dim=-1)
 
@@ -316,14 +326,15 @@ class FacadeModel(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.config = config
-        self.action_towers = nn.ModuleDict({
-            s: ActionTower(config) for s in config.sources
-        })
+        self.action_towers = nn.ModuleDict({s: ActionTower(config) for s in config.sources})
         self.context_tower = ContextTower(config)
 
     def encode_action(
-        self, source: str,
-        indices: torch.Tensor, weights: torch.Tensor, mask: torch.Tensor,
+        self,
+        source: str,
+        indices: torch.Tensor,
+        weights: torch.Tensor,
+        mask: torch.Tensor,
     ) -> torch.Tensor:
         return self.action_towers[source](indices, weights, mask)
 
@@ -331,8 +342,11 @@ class FacadeModel(nn.Module):
         return self.context_tower(ctx)
 
     def score(
-        self, source: str,
-        act_i: torch.Tensor, act_w: torch.Tensor, act_m: torch.Tensor,
+        self,
+        source: str,
+        act_i: torch.Tensor,
+        act_w: torch.Tensor,
+        act_m: torch.Tensor,
         ctx: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         """Cosine distance between action and context embeddings."""
@@ -350,13 +364,13 @@ def huber_like_loss(x: torch.Tensor, delta: float = 1.0) -> torch.Tensor:
     """Huber-like pointwise loss: quadratic near zero, linear far from zero."""
     return torch.where(
         x.abs() <= delta,
-        0.5 * x ** 2,
+        0.5 * x**2,
         delta * (x.abs() - 0.5 * delta),
     )
 
 
 def pairwise_ranking_loss(
-    natural_scores: torch.Tensor,    # [batch]
+    natural_scores: torch.Tensor,  # [batch]
     synthetic_scores: torch.Tensor,  # [batch, n_p]
     h: float = 0.1,
     s: float = 1.0,
@@ -497,9 +511,13 @@ def build_training_pairs(fs: FeatureSet) -> list[TrainingSample]:
         for pidx in af.accessor_weights:
             if pidx in fs.contexts and (rid, pidx) not in seen:
                 seen.add((rid, pidx))
-                pairs.append(TrainingSample(
-                    resource_id=rid, principal_idx=pidx, source=af.source,
-                ))
+                pairs.append(
+                    TrainingSample(
+                        resource_id=rid,
+                        principal_idx=pidx,
+                        source=af.source,
+                    )
+                )
     return pairs
 
 
@@ -531,32 +549,35 @@ class FacadeDataset(Dataset):
         )
         self.max_peers = min(
             max(
-                (max(
-                    len(c.peers.department_peers),
-                    len(c.peers.manager_peers),
-                    len(c.peers.group_peers),
-                    len(c.collaboration.co_access),
-                    1,
-                ) for c in feature_set.contexts.values()),
+                (
+                    max(
+                        len(c.peers.department_peers),
+                        len(c.peers.manager_peers),
+                        len(c.peers.group_peers),
+                        len(c.collaboration.co_access),
+                        1,
+                    )
+                    for c in feature_set.contexts.values()
+                ),
                 default=1,
             ),
             config.max_peers,
         )
         hist_lens = [len(c.history) for c in feature_set.contexts.values()]
         self.max_win = max(1, min(max(hist_lens, default=1), config.max_history_windows))
-        res_lens = [
-            len(hw.resource_ids)
-            for c in feature_set.contexts.values()
-            for hw in c.history
-        ]
+        res_lens = [len(hw.resource_ids) for c in feature_set.contexts.values() for hw in c.history]
         self.max_res = max(1, min(max(res_lens, default=1), config.max_res_per_window))
 
         # Pre-tensorize all contexts
         self._ctx: dict[int, dict[str, torch.Tensor]] = {}
         for pidx, ctx in feature_set.contexts.items():
             self._ctx[pidx] = tensorize_context(
-                ctx, feature_set.resource_vocab, cat_vocabs,
-                self.max_win, self.max_res, self.max_peers,
+                ctx,
+                feature_set.resource_vocab,
+                cat_vocabs,
+                self.max_win,
+                self.max_res,
+                self.max_peers,
             )
 
         # Pre-tensorize all actions
@@ -605,12 +626,10 @@ def collate_facade(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "action_weights": torch.stack([b["action_weights"] for b in batch]),
         "action_mask": torch.stack([b["action_mask"] for b in batch]),
         "natural_context": {
-            k: torch.stack([b["natural_context"][k] for b in batch])
-            for k in batch[0]["natural_context"]
+            k: torch.stack([b["natural_context"][k] for b in batch]) for k in batch[0]["natural_context"]
         },
         "synthetic_contexts": {
-            k: torch.stack([b["synthetic_contexts"][k] for b in batch])
-            for k in batch[0]["synthetic_contexts"]
+            k: torch.stack([b["synthetic_contexts"][k] for b in batch]) for k in batch[0]["synthetic_contexts"]
         },
     }
 
@@ -661,17 +680,23 @@ def train_epoch(
         for src, idxs in source_groups.items():
             idx_t = torch.tensor(idxs, dtype=torch.long, device=device)
             a_emb = model.encode_action(
-                src, act_i[idx_t], act_w[idx_t], act_m[idx_t],
+                src,
+                act_i[idx_t],
+                act_w[idx_t],
+                act_m[idx_t],
             )
             action_emb.index_copy_(0, idx_t, a_emb)
 
         # Cosine distance scores
-        nat_scores = 1.0 - (action_emb * nat_emb).sum(dim=-1)          # [B]
+        nat_scores = 1.0 - (action_emb * nat_emb).sum(dim=-1)  # [B]
         syn_scores = 1.0 - (action_emb.unsqueeze(1) * syn_emb).sum(dim=-1)  # [B, n_p]
 
         loss = pairwise_ranking_loss(
-            nat_scores, syn_scores,
-            config.hard_margin, config.soft_margin, config.omega,
+            nat_scores,
+            syn_scores,
+            config.hard_margin,
+            config.soft_margin,
+            config.omega,
         )
         loss.backward()
         optimizer.step()
