@@ -83,6 +83,9 @@ export function DetectionDetailContent({
             </span>
             <h3>{detail.detection.title}</h3>
             <p className="detail-subtle">{detail.detection.scenario}</p>
+            <span className="badge badge--neutral" style={{ fontSize: "0.7rem", marginTop: "0.25rem" }}>
+              {detail.detection.model_version}
+            </span>
           </div>
         </div>
         <div className="detail-hero__actions">
@@ -145,6 +148,37 @@ export function DetectionDetailContent({
             ))}
           </ul>
         </DetailSectionCard>
+
+        {Object.keys(detail.detection.feature_attributions).length > 0 && (
+          <DetailSectionCard title="Feature attributions">
+            <div className="attribution-bars">
+              {Object.entries(detail.detection.feature_attributions)
+                .sort(([, a], [, b]) => b - a)
+                .map(([feature, value]) => {
+                  const maxVal = Math.max(
+                    ...Object.values(detail.detection.feature_attributions),
+                  );
+                  const pct = maxVal > 0 ? (value / maxVal) * 100 : 0;
+                  return (
+                    <div className="attribution-row" key={feature}>
+                      <span className="attribution-label">
+                        {feature.replace(/_/g, " ")}
+                      </span>
+                      <div className="attribution-track">
+                        <div
+                          className="attribution-fill"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="attribution-value">
+                        {value.toFixed(3)}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </DetailSectionCard>
+        )}
 
         <DetailSectionCard title="Peer context">
           <ul className="flat-list">

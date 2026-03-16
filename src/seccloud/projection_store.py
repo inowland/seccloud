@@ -427,6 +427,8 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                 ids=stale_event_ids,
             )
             for detection in detections:
+                if not detection["event_ids"] or detection["event_ids"][0] not in event_lookup:
+                    continue
                 anchor_event = event_lookup[detection["event_ids"][0]]
                 cur.execute(
                     sql.SQL("""
@@ -455,7 +457,9 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                     (workspace.tenant_id, detection["detection_id"]),
                 )
                 for ordinal, event_id in enumerate(detection["event_ids"]):
-                    linked_event = event_lookup[event_id]
+                    linked_event = event_lookup.get(event_id)
+                    if linked_event is None:
+                        continue
                     cur.execute(
                         sql.SQL("""
                         insert into {dee} (

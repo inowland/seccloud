@@ -42,6 +42,7 @@ from seccloud.runtime_stream import (
     advance_runtime_stream,
     get_runtime_stream_state,
     initialize_runtime_stream,
+    reset_stream_cursor,
 )
 from seccloud.source_pack import build_source_capability_matrix
 from seccloud.storage import IntakeIdempotencyConflictError, Workspace
@@ -179,10 +180,13 @@ def create_app() -> FastAPI:
     @app.post("/api/stream/reset", response_model=StreamReset)
     def stream_reset() -> dict:
         ws = workspace()
+        source_path = ws.manifests_dir / "runtime_stream_source_events.json"
+        if source_path.exists():
+            return reset_stream_cursor(ws)
         return initialize_runtime_stream(ws)
 
     @app.post("/api/stream/advance", response_model=StreamAdvance)
-    def stream_advance(batch_size: int = Query(default=5, ge=1, le=50)) -> dict:
+    def stream_advance(batch_size: int = Query(default=5, ge=1, le=10000)) -> dict:
         ws = workspace()
         return advance_runtime_stream(ws, batch_size=batch_size)
 

@@ -1,0 +1,187 @@
+{
+  "ablation": {
+    "full_model": {
+      "aggregate_roc_auc": 0.8878648233486943,
+      "aggregate_pr_auc": 0.7585403726708075,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.8484848484848485,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.31313131313131315,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.9642857142857142
+      },
+      "final_loss": 0.001398786305820823,
+      "elapsed_s": 88.49821519851685
+    },
+    "no_history": {
+      "aggregate_roc_auc": 0.9308755760368663,
+      "aggregate_pr_auc": 0.8299319727891155,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.9595959595959596,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.5151515151515151,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.9489795918367347
+      },
+      "final_loss": 0.0013401570294281518,
+      "elapsed_s": 14.34754490852356
+    },
+    "no_peers": {
+      "aggregate_roc_auc": 0.9738863287250383,
+      "aggregate_pr_auc": 0.8213390619405656,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.9393939393939394,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.9191919191919192,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.8979591836734694
+      },
+      "final_loss": 0.0013872116604652883,
+      "elapsed_s": 87.65409517288208
+    },
+    "no_collaboration": {
+      "aggregate_roc_auc": 0.9278033794162827,
+      "aggregate_pr_auc": 0.722933459775565,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.8181818181818181,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.9191919191919192,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.8061224489795917
+      },
+      "final_loss": 0.001380338890481899,
+      "elapsed_s": 82.81050324440002
+    },
+    "no_static": {
+      "aggregate_roc_auc": 0.8986175115207373,
+      "aggregate_pr_auc": 0.7041688470259899,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.9191919191919192,
+        "credential_compromise": 0.9696969696969697,
+        "privilege_escalation": 0.5151515151515151,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.8673469387755102
+      },
+      "final_loss": 0.0013510039759581226,
+      "elapsed_s": 88.31705808639526
+    },
+    "history_only": {
+      "aggregate_roc_auc": 0.8509984639016898,
+      "aggregate_pr_auc": 0.6203577124629756,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.9797979797979798,
+        "credential_compromise": 0.8888888888888888,
+        "privilege_escalation": 0.5656565656565656,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.6938775510204082
+      },
+      "final_loss": 0.0013815865808313322,
+      "elapsed_s": 80.72128176689148
+    },
+    "peers_only": {
+      "aggregate_roc_auc": 0.8617511520737327,
+      "aggregate_pr_auc": 0.6703296703296702,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.8787878787878788,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.3535353535353535,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.8418367346938775
+      },
+      "final_loss": 0.0013600105507421928,
+      "elapsed_s": 8.366233110427856
+    }
+  },
+  "cold_start": {
+    "3": {
+      "aggregate_roc_auc": 0.0,
+      "scenario_aucs": {},
+      "elapsed_s": 8.234347820281982
+    },
+    "7": {
+      "aggregate_roc_auc": 0.505050505050505,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.505050505050505
+      },
+      "elapsed_s": 11.480719089508057
+    },
+    "14": {
+      "aggregate_roc_auc": 0.7073684210526315,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.7878787878787878,
+        "credential_compromise": 0.9595959595959596,
+        "privilege_escalation": 0.0505050505050505,
+        "insider_collaboration": 0.8520408163265306
+      },
+      "elapsed_s": 19.023977994918823
+    },
+    "20": {
+      "aggregate_roc_auc": 0.7429078014184396,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.1717171717171717,
+        "credential_compromise": 1.0,
+        "privilege_escalation": 0.303030303030303,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.9642857142857142
+      },
+      "elapsed_s": 33.21730089187622
+    },
+    "25": {
+      "aggregate_roc_auc": 0.9347079037800687,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.797979797979798,
+        "departing_employee": 1.0,
+        "account_takeover": 0.9797979797979798
+      },
+      "elapsed_s": 44.11252784729004
+    }
+  },
+  "embedding_dim": {
+    "32": {
+      "aggregate_roc_auc": 0.8325652841781874,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.5151515151515151,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.4747474747474747,
+        "departing_employee": 1.0,
+        "account_takeover": 0.9696969696969697,
+        "insider_collaboration": 0.8775510204081632
+      },
+      "final_loss": 0.0013985951959732826,
+      "elapsed_s": 88.1208028793335
+    },
+    "64": {
+      "aggregate_roc_auc": 0.9385560675883255,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.9090909090909091,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.595959595959596,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.9591836734693877
+      },
+      "final_loss": 0.0013241095952928235,
+      "elapsed_s": 88.2915530204773
+    },
+    "128": {
+      "aggregate_roc_auc": 0.9216589861751152,
+      "scenario_aucs": {
+        "slow_exfiltration": 0.9494949494949495,
+        "credential_compromise": 0.9797979797979798,
+        "privilege_escalation": 0.4949494949494949,
+        "departing_employee": 1.0,
+        "account_takeover": 0.98989898989899,
+        "insider_collaboration": 0.9336734693877551
+      },
+      "final_loss": 0.001347851551587019,
+      "elapsed_s": 88.7271180152893
+    }
+  }
+}

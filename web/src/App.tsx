@@ -1623,27 +1623,33 @@ function StreamOverlay({
   workerState,
   performAction,
 }: StreamOverlayProps) {
-  const workerStatus =
-    workerState.pending_batch_count > 0
-      ? `${formatNumber(workerState.pending_batch_count)} pending`
-      : (workerState.last_service_status ?? "idle");
-
   return (
     <div className="stream-overlay">
       <div className="stream-overlay__header">
-        <div>
-          <span className="eyebrow">Runtime Controls</span>
-          <strong>
-            {streamState.cursor ?? 0}/{streamState.total_source_events ?? 0}
-          </strong>
-        </div>
+        <span className="eyebrow">Demo Control</span>
         <span className="stream-overlay__status">
-          {streamState.complete ? "Current" : "In progress"}
+          {streamState.complete ? "Complete" : "Streaming"}
         </span>
       </div>
-      <div className="stream-overlay__meta">
-        <span>{formatNumber(streamState.detection_count)} detections</span>
-        <span>Worker {workerStatus}</span>
+      <div className="stream-overlay__stats">
+        <div className="stream-overlay__stat">
+          <span className="stream-overlay__stat-value">
+            {formatNumber(streamState.cursor ?? 0)}/{formatNumber(streamState.total_source_events ?? 0)}
+          </span>
+          <span className="stream-overlay__stat-label">released</span>
+        </div>
+        <div className="stream-overlay__stat">
+          <span className="stream-overlay__stat-value">
+            {formatNumber(streamState.normalized_event_count ?? 0)}
+          </span>
+          <span className="stream-overlay__stat-label">processed</span>
+        </div>
+        <div className="stream-overlay__stat">
+          <span className="stream-overlay__stat-value">
+            {formatNumber(streamState.detection_count)}
+          </span>
+          <span className="stream-overlay__stat-label">detections</span>
+        </div>
       </div>
       <div className="stream-overlay__actions">
         <button
@@ -1654,21 +1660,9 @@ function StreamOverlay({
         </button>
         <button
           disabled={busy}
-          onClick={() => performAction("/api/stream/advance?batch_size=10")}
+          onClick={() => performAction("/api/stream/advance?batch_size=5000")}
         >
-          Advance 10
-        </button>
-        <button
-          disabled={busy}
-          onClick={() => performAction("/api/stream/advance?batch_size=25")}
-        >
-          Advance 25
-        </button>
-        <button
-          disabled={busy}
-          onClick={() => performAction("/api/stream/advance?batch_size=50")}
-        >
-          Advance 50
+          Advance 5K
         </button>
       </div>
     </div>

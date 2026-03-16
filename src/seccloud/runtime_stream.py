@@ -1,18 +1,18 @@
+"""Runtime stream: scaled synthetic data with ML-based detection.
+
+The bootstrap CLI generates ~50K events from 200 principals, trains the
+contrastive model, and pre-computes ML detections.  The API advances the
+stream cursor in batches, feeding events through normalization and
+projecting pre-computed detections as they trigger.
+"""
+
 from __future__ import annotations
 
+import random
 from typing import Any
 
 from seccloud.storage import Workspace, format_timestamp, parse_timestamp, read_json, write_json
-from seccloud.synthetic import generate_synthetic_dataset
 from seccloud.workers import submit_grouped_raw_events
-
-
-def _active_detection_count(workspace: Workspace) -> int:
-    return sum(1 for detection in workspace.list_detections() if detection.get("status", "open") == "open")
-
-
-def _stream_manifest_path(workspace: Workspace):
-    return workspace.manifests_dir / "runtime_stream_manifest.json"
 
 
 def _interleave_runtime_timeline(
@@ -42,7 +42,10 @@ def _interleave_runtime_timeline(
     return interleaved_events
 
 
-def _build_runtime_source_events() -> tuple[list[dict[str, Any]], dict[str, bool]]:
+def _build_legacy_source_events() -> tuple[list[dict[str, Any]], dict[str, bool]]:
+    """Build the small synthetic event stream (used by tests only)."""
+    from seccloud.synthetic import generate_synthetic_dataset
+
     dataset = generate_synthetic_dataset()
     baseline_events = [event for event in dataset.raw_events if event.get("scenario") == "baseline"]
     scenario_events = [event for event in dataset.raw_events if event.get("scenario") != "baseline"]
@@ -70,13 +73,60 @@ def _build_runtime_source_events() -> tuple[list[dict[str, Any]], dict[str, bool
     return all_events, dataset.expectations
 
 
-def initialize_runtime_stream(workspace: Workspace) -> dict[str, Any]:
+def _active_detection_count(workspace: Workspace) -> int:
+    return sum(1 for detection in workspace.list_detections() if detection.get("status", "open") == "open")
+
+
+def _stream_manifest_path(workspace: Workspace):
+    return workspace.manifests_dir / "runtime_stream_manifest.json"
+
+
+def initialize_runtime_stream(
+    workspace: Workspace,
+    *,
+    scaled: bool = False,
+    num_principals: int = 200,
+    num_days: int = 10,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Generate synthetic data and optionally train ML model.
+
+    When *scaled* is True (the default, used by ``bootstrap-local-runtime``),
+    generates ~50K events from 200 principals, trains the contrastive model,
+    and pre-computes ML detections.  This takes ~90 seconds.
+
+    When *scaled* is False (used by tests), generates a small dataset from
+    the legacy synthetic generator without ML training.
+    """
     workspace.reset_runtime()
-    source_events, expectations = _build_runtime_source_events()
-    seed = {
-        "source_events": source_events,
-        "expectations": expectations,
-    }
+
+    if scaled:
+        from seccloud.ml_scoring import precompute_detections, serialize_precomputed
+        from seccloud.synthetic_scale import ScaleConfig, generate_org
+        from seccloud.synthetic_scale import generate_scaled_dataset as gen_scaled
+
+        cfg = ScaleConfig(
+            num_principals=num_principals,
+            num_days=num_days,
+            seed=seed,
+            inject_scenarios=True,
+        )
+        dataset = gen_scaled(cfg)
+        source_events = dataset.raw_events
+        expectations = dataset.expectations
+
+        rng = random.Random(seed)
+        principals, teams = generate_org(cfg, rng)
+        detections = precompute_detections(
+            source_events, principals, teams, epochs=10, seed=seed,
+        )
+        write_json(
+            workspace.manifests_dir / "precomputed_detections.json",
+            serialize_precomputed(detections),
+        )
+    else:
+        source_events, expectations = _build_legacy_source_events()
+
     write_json(workspace.synthetic_manifest_path, {"expectations": expectations})
     write_json(
         _stream_manifest_path(workspace),
@@ -86,7 +136,10 @@ def initialize_runtime_stream(workspace: Workspace) -> dict[str, Any]:
             "complete": False,
         },
     )
-    write_json(workspace.manifests_dir / "runtime_stream_source_events.json", seed)
+    write_json(
+        workspace.manifests_dir / "runtime_stream_source_events.json",
+        {"source_events": source_events, "expectations": expectations},
+    )
     workspace.request_projection_refresh()
     return {
         "status": "initialized",
@@ -95,12 +148,79 @@ def initialize_runtime_stream(workspace: Workspace) -> dict[str, Any]:
     }
 
 
+def reset_stream_cursor(workspace: Workspace) -> dict[str, Any]:
+    """Reset the stream cursor to 0 without regenerating data or retraining.
+
+    Called from the UI's "Restart stream" button.  Preserves the pre-computed
+    source events and ML detections, clears all processed state so the stream
+    can be replayed from the beginning.
+    """
+    import shutil
+
+    source_path = workspace.manifests_dir / "runtime_stream_source_events.json"
+    precomputed_path = workspace.manifests_dir / "precomputed_detections.json"
+
+    if not source_path.exists():
+        return {
+            "status": "error",
+            "message": "No stream data found. Run: seccloud bootstrap-local-runtime --reset-stream",
+            "total_source_events": 0,
+            "cursor": 0,
+        }
+
+    # Read totals before clearing
+    source_data = read_json(source_path, {"source_events": []})
+    total = len(source_data.get("source_events", []))
+
+    # Clear processed state but preserve manifests
+    for path in (
+        workspace.intake_dir,
+        workspace.raw_dir,
+        workspace.dead_letters_dir,
+        workspace.normalized_dir,
+        workspace.derived_dir,
+        workspace.detections_dir,
+        workspace.cases_dir,
+        workspace.ops_dir,
+        workspace.founder_dir,
+    ):
+        if path.exists():
+            shutil.rmtree(path)
+    workspace.bootstrap()
+
+    # Reset stream cursor
+    write_json(
+        _stream_manifest_path(workspace),
+        {
+            "cursor": 0,
+            "total_source_events": total,
+            "complete": False,
+        },
+    )
+    workspace.request_projection_refresh()
+    return {
+        "status": "reset",
+        "total_source_events": total,
+        "cursor": 0,
+    }
+
+
 def advance_runtime_stream(workspace: Workspace, batch_size: int = 5) -> dict[str, Any]:
     workspace.bootstrap()
     manifest = read_json(_stream_manifest_path(workspace))
     if manifest is None:
-        initialize_runtime_stream(workspace)
-        manifest = read_json(_stream_manifest_path(workspace))
+        return {
+            "status": "error",
+            "message": "No stream data found. Run: seccloud bootstrap-local-runtime --reset-stream",
+            "cursor": 0,
+            "total_source_events": 0,
+            "complete": False,
+            "batch_size": 0,
+            "accepted_batches": 0,
+            "accepted_records": 0,
+            "pending_batch_count": 0,
+        }
+
     source_events = read_json(
         workspace.manifests_dir / "runtime_stream_source_events.json",
         {"source_events": []},

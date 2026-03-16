@@ -664,13 +664,14 @@ def _generate_day_events(
                 })
             elif source == "gworkspace":
                 res = aff.by_source["gworkspace"].sample(rng)
+                is_share = rng.random() < 0.05
                 payload.update({
-                    "event_type": "view",
+                    "event_type": "share_external" if is_share else "view",
                     "resource_id": res.resource_id,
                     "resource_name": res.name,
                     "resource_kind": "document",
                     "sensitivity": res.sensitivity,
-                    "external": False,
+                    "external": is_share,
                 })
             elif source == "github":
                 res = aff.by_source["github"].sample(rng)

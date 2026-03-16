@@ -301,7 +301,58 @@ def _update_profile(state: dict[str, Any], event: dict[str, Any]) -> None:
     embeddings[principal_id] = build_embedding(event, profile, peer_resource_count)
 
 
+def _replay_precomputed_detections(workspace: Workspace) -> dict[str, Any]:
+    """Emit pre-computed ML detections based on current stream cursor.
+
+    Reads the pre-computed detection manifest and the stream cursor.
+    Any detection with ``trigger_cursor <= cursor`` that hasn't been
+    written yet gets saved to the workspace.
+    """
+    from seccloud.ml_scoring import deserialize_precomputed
+    from seccloud.storage import read_json
+
+    manifest_path = workspace.manifests_dir / "runtime_stream_manifest.json"
+    stream_manifest = read_json(manifest_path, {"cursor": 0})
+    cursor = stream_manifest.get("cursor", 0)
+
+    precomputed_path = workspace.manifests_dir / "precomputed_detections.json"
+    precomputed_data = read_json(precomputed_path, [])
+    detections = deserialize_precomputed(precomputed_data)
+
+    existing_detection_ids = {item["detection_id"] for item in workspace.list_detections()}
+    new_detections = 0
+
+    for pdet in detections:
+        if pdet.trigger_cursor > cursor:
+            continue
+        det = pdet.detection
+        if det.detection_id in existing_detection_ids:
+            continue
+        # Resolve event_keys to event_ids via the identity manifest
+        resolved_event_ids = []
+        for ek in det.event_ids:
+            eid = workspace.allocate_event_id(ek)
+            resolved_event_ids.append(eid)
+        det_dict = det.to_dict()
+        det_dict["event_ids"] = resolved_event_ids
+        workspace.save_detection(det_dict)
+        existing_detection_ids.add(det.detection_id)
+        new_detections += 1
+
+    return {
+        "normalized_event_count": cursor,
+        "new_detection_count": new_detections,
+        "total_detection_count": len(existing_detection_ids),
+    }
+
+
 def build_derived_state_and_detections(workspace: Workspace) -> dict[str, Any]:
+    # Check for pre-computed ML detections (M0.5 scaled mode)
+    precomputed_path = workspace.manifests_dir / "precomputed_detections.json"
+    if precomputed_path.exists():
+        return _replay_precomputed_detections(workspace)
+
+    # Original heuristic scoring path
     normalized_events = workspace.list_normalized_events()
     state = DerivedState().to_dict()
     existing_detection_ids = {item["detection_id"] for item in workspace.list_detections()}

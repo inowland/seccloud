@@ -135,17 +135,31 @@ def get_event_detail(workspace: Workspace, event_id: str, dsn: str | None = None
         indexed = fetch_hot_event_detail(tenant_id=workspace.tenant_id, event_id=event_id, dsn=dsn)
         if indexed is not None:
             return indexed["event_payload"]
-    for event in workspace.list_normalized_events():
-        if event["event_id"] == event_id:
-            return event
+    # Only fall back to full file scan when no DSN (test/CLI usage).
+    # At scale, scanning 50K+ files per event lookup is too slow.
+    if dsn is None:
+        for event in workspace.list_normalized_events():
+            if event["event_id"] == event_id:
+                return event
     return None
 
 
 def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
     detection = workspace.get_detection(detection_id)
-    anchor_event = get_event_detail(workspace, detection["event_ids"][0], dsn=dsn)
+    anchor_event = get_event_detail(
+        workspace, detection["event_ids"][0], dsn=dsn,
+    ) if detection.get("event_ids") else None
     if anchor_event is None:
-        raise KeyError(f"Anchor event not found for detection {detection_id}")
+        return {
+            "principal_id": detection.get("related_entity_ids", ["unknown"])[0],
+            "peer_group": "unknown",
+            "resource_id": "unknown",
+            "principal_total_events": 0,
+            "principal_prior_resource_access_count": 0,
+            "peer_group_resource_access_count": 0,
+            "peer_group_principal_count": 0,
+            "detection_reasons": detection["reasons"],
+        }
     derived_state = workspace.load_derived_state()
     peer_group = anchor_event["principal"]["department"]
     peer_state = derived_state.get("peer_groups", {}).get(peer_group, {})

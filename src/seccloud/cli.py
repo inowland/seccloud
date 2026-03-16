@@ -116,7 +116,7 @@ def bootstrap_local_runtime(
     dsn = postgres.get("dsn") or local_postgres_dsn(runtime_root)
     stream_manifest_path = workspace.manifests_dir / "runtime_stream_manifest.json"
     if reset_stream or not stream_manifest_path.exists():
-        stream = initialize_runtime_stream(workspace)
+        stream = initialize_runtime_stream(workspace, scaled=True)
     else:
         stream = {
             "status": "already_initialized",

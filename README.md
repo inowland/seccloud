@@ -14,11 +14,19 @@ The local stack has five pieces:
 - a FastAPI backend on `http://localhost:8000`
 - a React/Vite frontend on `http://localhost:5173`
 
-The current UI is organized around:
+The detection pipeline uses a **two-tower contrastive model** (Facade architecture)
+trained on benign enterprise activity. The model learns the relationship between
+"who accesses a resource" (action tower) and "who the principal is" (context tower),
+flagging actions where the two embeddings diverge. At stream reset the model is
+trained on synthetic data and detections are pre-computed; as events stream into
+the UI the detections appear at the point in the timeline where the attack
+pattern has manifested.
 
-- `Detections`: evidence-backed detections that need review
-- `Events`: normalized activity, separate from the queue
-- `Integrations`: a source list with configuration, state, and recovery guidance per integration
+The UI is organized around:
+
+- `Detections`: ML-scored detections with feature attribution breakdowns
+- `Events`: normalized activity from four source types (Okta, Google Workspace, GitHub, Snowflake)
+- `Integrations`: source health and contract coverage per integration
 
 Important:
 
@@ -55,7 +63,7 @@ Notes:
 
 - If `uv sync` already finds Python 3.12, you can skip `uv python install 3.12`.
 
-### 3. Bootstrap the local runtime and start the api
+### 3. Bootstrap the local runtime and start the API
 
 Open Terminal 1 in the repo root and run:
 
@@ -67,7 +75,7 @@ seccloud run-api --reload
 
 Leave that terminal running.
 
-### 5. Start the worker loop
+### 4. Start the worker loop
 
 Open Terminal 2 in the repo root and run:
 
@@ -78,15 +86,7 @@ seccloud run-worker-service --poll-interval-seconds 1
 
 Leave that terminal running.
 
-If you want to drain pending work and exit instead of running continuously:
-
-```bash
-seccloud run-worker-service --poll-interval-seconds 0 --exit-when-idle
-```
-
-If the worker needs to be restarted during local development, just run the same command again. Queue state and worker state are persisted under the workspace, so the restarted loop resumes from the pending intake queue instead of relying on the browser to trigger processing.
-
-### 6. Start the frontend
+### 5. Start the frontend
 
 Open Terminal 3 in the repo root and run:
 
@@ -99,6 +99,31 @@ Then open the Vite URL shown in the terminal, usually:
 ```text
 http://localhost:5173/
 ```
+
+### 6. Run the ML demo
+
+The `bootstrap-local-runtime --reset-stream` step (step 3) generates ~50K
+synthetic events from 200 principals, trains the contrastive model, and
+pre-computes ML detections. This takes ~90 seconds.
+
+In the browser, use the **Demo Control** overlay at the bottom of the screen:
+
+1. Click **Advance 5K** a few times — events stream into the system and get
+   normalized + projected. The worker loop in Terminal 2 processes each batch.
+
+2. Watch detections appear in the **Detections** tab as the stream cursor
+   passes each attack scenario's trigger point. Each detection shows:
+   - `contrastive-facade-v1` model version
+   - anomaly score from the two-tower cosine distance
+   - feature attribution breakdown (which signals drove the score)
+   - linked attack events
+
+The six injected attack scenarios are: slow exfiltration, credential compromise,
+privilege escalation, departing employee, account takeover, and insider
+collaboration.
+
+To re-generate the data and retrain the model, stop the API server, rerun
+`seccloud bootstrap-local-runtime --reset-stream`, and start the API again.
 
 ## Useful Non-UI Commands
 
@@ -182,11 +207,27 @@ Notes:
 
 Runtime state is generated locally under `.seccloud/runtime` by default and is gitignored.
 
+## ML Pipeline (M0)
+
+The ML detection pipeline lives in four modules under `src/seccloud/`:
+
+| Module | Purpose |
+|---|---|
+| `synthetic_scale.py` | WS1: Generates realistic enterprise activity at scale (demo: 200 principals, ~50K events) with 6 injected attack scenarios |
+| `feature_pipeline.py` | WS2: Transforms events into Facade model inputs — weighted accessor sets (action features) and principal context profiles |
+| `contrastive_model.py` | WS3: Two-tower contrastive model in PyTorch — action tower + context tower with pairwise ranking loss |
+| `evaluation.py` | WS4+5: Multi-scale detection (HAC clustering) and evaluation framework with per-scenario ROC AUC metrics |
+| `onnx_export.py` | WS6: ONNX export with numerical equivalence validation and latency benchmarks |
+| `ml_scoring.py` | M0.5: Bridge between the ML pipeline and the Detection contract for UI integration |
+
+M0 validation results are in `project/plan/m0-results.md`.
+
 ## Current Limits
 
-This is still a PoC:
+This is a validated prototype:
 
-- the data is synthetic or fixture-driven
+- the data is synthetic (realistic distributions, not real enterprise data)
 - the local stack is local and temporary
-- the detector path is still heuristic-first
-- the current UI is meant to support product evaluation, not define the final production workflow
+- the ML model is pre-computed at stream reset, not scoring in real-time
+- insider collaboration detection is weak (per-principal scoring can't detect coordination)
+- the UI is meant to support product evaluation, not define the final production workflow
