@@ -197,7 +197,7 @@ def _empty_ingest_result(workspace: Workspace) -> dict[str, Any]:
     }
 
 
-def run_normalization_worker(workspace: Workspace, max_batches: int | None = None) -> dict[str, Any]:
+def run_normalization_worker(workspace: Workspace, max_batches: int | None = None, dsn: str | None = None) -> dict[str, Any]:
     workspace.bootstrap()
     pending_batches = workspace.list_pending_intake_batches()
     if max_batches is not None:
@@ -235,7 +235,7 @@ def run_normalization_worker(workspace: Workspace, max_batches: int | None = Non
         workspace.mark_intake_batch_processed(batch["batch_id"])
         processed_batch_ids.append(batch["batch_id"])
 
-    ingest = ingest_raw_events(workspace) if processed_batch_ids else _empty_ingest_result(workspace)
+    ingest = ingest_raw_events(workspace, dsn=dsn) if processed_batch_ids else _empty_ingest_result(workspace)
     worker_state = workspace.load_worker_state()
     worker_state["normalization_runs"] = worker_state.get("normalization_runs", 0) + 1
     worker_state["last_processed_batch_id"] = processed_batch_ids[-1] if processed_batch_ids else None
@@ -261,8 +261,8 @@ def run_detection_worker(workspace: Workspace) -> dict[str, Any]:
     return {"detect": detect, "ops_metadata": ops}
 
 
-def run_local_processing_workers(workspace: Workspace, max_batches: int | None = None) -> dict[str, Any]:
-    normalization = run_normalization_worker(workspace, max_batches=max_batches)
+def run_local_processing_workers(workspace: Workspace, max_batches: int | None = None, dsn: str | None = None) -> dict[str, Any]:
+    normalization = run_normalization_worker(workspace, max_batches=max_batches, dsn=dsn)
     detection = run_detection_worker(workspace)
     return {
         "normalization": normalization,
@@ -300,7 +300,7 @@ def run_all_local_workers(
     dsn: str | None = None,
     max_batches: int | None = None,
 ) -> dict[str, Any]:
-    processing = run_local_processing_workers(workspace, max_batches=max_batches)
+    processing = run_local_processing_workers(workspace, max_batches=max_batches, dsn=dsn)
     source_stats = run_source_stats_projector(workspace)
     projection = run_projector_worker(workspace, dsn)
     return {

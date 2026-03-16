@@ -311,125 +311,138 @@ def _hot_event_index_row(workspace: Workspace, event: dict[str, Any]) -> dict[st
     }
 
 
+def upsert_event_rows(
+    cur: psycopg.Cursor,
+    workspace: Workspace,
+    events: list[dict[str, Any]],
+) -> None:
+    """Upsert normalized events into hot_event_index and projected_events."""
+    hei = _tbl(HOT_EVENT_INDEX_TABLE)
+    pe = _tbl(PROJECTED_EVENTS_TABLE)
+    for event in events:
+        row = _hot_event_index_row(workspace, event)
+        cur.execute(
+            sql.SQL("""
+            insert into {hei} (
+              tenant_id, event_id, event_key, normalized_schema_version, source, integration_id,
+              source_event_id, observed_at, principal_entity_id, principal_id,
+              principal_display_name, principal_email, principal_department,
+              resource_entity_id, resource_id, resource_name, resource_kind,
+              resource_sensitivity, action_verb, action_category, environment,
+              attributes, event_payload, normalized_pointer, raw_pointer,
+              raw_retention_state, indexed_at, updated_at
+            ) values (
+              %(tenant_id)s, %(event_id)s, %(event_key)s, %(normalized_schema_version)s,
+              %(source)s, %(integration_id)s,
+              %(source_event_id)s, %(observed_at)s, %(principal_entity_id)s, %(principal_id)s,
+              %(principal_display_name)s, %(principal_email)s, %(principal_department)s,
+              %(resource_entity_id)s, %(resource_id)s, %(resource_name)s, %(resource_kind)s,
+              %(resource_sensitivity)s, %(action_verb)s, %(action_category)s, %(environment)s::jsonb,
+              %(attributes)s::jsonb, %(event_payload)s::jsonb,
+              %(normalized_pointer)s::jsonb, %(raw_pointer)s::jsonb,
+              %(raw_retention_state)s, %(indexed_at)s, %(updated_at)s
+            )
+            on conflict (event_id) do update set
+              tenant_id = excluded.tenant_id,
+              event_key = excluded.event_key,
+              normalized_schema_version = excluded.normalized_schema_version,
+              source = excluded.source,
+              integration_id = excluded.integration_id,
+              source_event_id = excluded.source_event_id,
+              observed_at = excluded.observed_at,
+              principal_entity_id = excluded.principal_entity_id,
+              principal_id = excluded.principal_id,
+              principal_display_name = excluded.principal_display_name,
+              principal_email = excluded.principal_email,
+              principal_department = excluded.principal_department,
+              resource_entity_id = excluded.resource_entity_id,
+              resource_id = excluded.resource_id,
+              resource_name = excluded.resource_name,
+              resource_kind = excluded.resource_kind,
+              resource_sensitivity = excluded.resource_sensitivity,
+              action_verb = excluded.action_verb,
+              action_category = excluded.action_category,
+              environment = excluded.environment,
+              attributes = excluded.attributes,
+              event_payload = excluded.event_payload,
+              normalized_pointer = excluded.normalized_pointer,
+              raw_pointer = excluded.raw_pointer,
+              raw_retention_state = excluded.raw_retention_state,
+              updated_at = excluded.updated_at
+            """).format(hei=hei),
+            {
+                **row,
+                "environment": json.dumps(row["environment"]),
+                "attributes": json.dumps(row["attributes"]),
+                "event_payload": json.dumps(row["event_payload"]),
+                "normalized_pointer": json.dumps(row["normalized_pointer"]),
+                "raw_pointer": json.dumps(row["raw_pointer"]) if row["raw_pointer"] is not None else None,
+            },
+        )
+        cur.execute(
+            sql.SQL("""
+            insert into {pe} (
+              event_id, observed_at, payload
+            ) values (
+              %(event_id)s, %(observed_at)s, %(payload)s::jsonb
+            )
+            on conflict (event_id) do update set
+              observed_at = excluded.observed_at,
+              payload = excluded.payload
+            """).format(pe=pe),
+            {
+                "event_id": row["event_id"],
+                "observed_at": row["observed_at"],
+                "payload": json.dumps(row["event_payload"]),
+            },
+        )
+
+
 def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
+    """Sync detections and stream state to postgres.
+
+    Events are projected inline during normalization, so this function
+    only handles detections, detection-event edges, and projection state.
+    For backward compatibility (tests without inline projection), it also
+    upserts any events found in normalized JSON files.
+    """
     dsn = dsn or default_projection_dsn()
+    # Read JSON-based normalized events only if they exist (test/legacy path)
     normalized_events = workspace.list_normalized_events()
     detections = workspace.list_detections()
-    event_lookup = {event["event_id"]: event for event in normalized_events}
-    indexed_rows = [_hot_event_index_row(workspace, event) for event in normalized_events]
-    event_ids = sorted(event_lookup)
-    detection_ids = sorted(detection["detection_id"] for detection in detections)
+    detection_ids = sorted(d["detection_id"] for d in detections)
 
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         ensure_projection_schema(conn)
         with conn.cursor() as cur:
-            hei = _tbl(HOT_EVENT_INDEX_TABLE)
-            pe = _tbl(PROJECTED_EVENTS_TABLE)
             pd = _tbl(PROJECTED_DETECTIONS_TABLE)
             dee = _tbl(DETECTION_EVENT_EDGE_TABLE)
             ps = _tbl(PROJECTION_STATE_TABLE)
-            for row in indexed_rows:
-                cur.execute(
-                    sql.SQL("""
-                    insert into {hei} (
-                      tenant_id, event_id, event_key, normalized_schema_version, source, integration_id,
-                      source_event_id, observed_at, principal_entity_id, principal_id,
-                      principal_display_name, principal_email, principal_department,
-                      resource_entity_id, resource_id, resource_name, resource_kind,
-                      resource_sensitivity, action_verb, action_category, environment,
-                      attributes, event_payload, normalized_pointer, raw_pointer,
-                      raw_retention_state, indexed_at, updated_at
-                    ) values (
-                      %(tenant_id)s, %(event_id)s, %(event_key)s, %(normalized_schema_version)s,
-                      %(source)s, %(integration_id)s,
-                      %(source_event_id)s, %(observed_at)s, %(principal_entity_id)s, %(principal_id)s,
-                      %(principal_display_name)s, %(principal_email)s, %(principal_department)s,
-                      %(resource_entity_id)s, %(resource_id)s, %(resource_name)s, %(resource_kind)s,
-                      %(resource_sensitivity)s, %(action_verb)s, %(action_category)s, %(environment)s::jsonb,
-                      %(attributes)s::jsonb, %(event_payload)s::jsonb,
-                      %(normalized_pointer)s::jsonb, %(raw_pointer)s::jsonb,
-                      %(raw_retention_state)s, %(indexed_at)s, %(updated_at)s
-                    )
-                    on conflict (event_id) do update set
-                      tenant_id = excluded.tenant_id,
-                      event_key = excluded.event_key,
-                      normalized_schema_version = excluded.normalized_schema_version,
-                      source = excluded.source,
-                      integration_id = excluded.integration_id,
-                      source_event_id = excluded.source_event_id,
-                      observed_at = excluded.observed_at,
-                      principal_entity_id = excluded.principal_entity_id,
-                      principal_id = excluded.principal_id,
-                      principal_display_name = excluded.principal_display_name,
-                      principal_email = excluded.principal_email,
-                      principal_department = excluded.principal_department,
-                      resource_entity_id = excluded.resource_entity_id,
-                      resource_id = excluded.resource_id,
-                      resource_name = excluded.resource_name,
-                      resource_kind = excluded.resource_kind,
-                      resource_sensitivity = excluded.resource_sensitivity,
-                      action_verb = excluded.action_verb,
-                      action_category = excluded.action_category,
-                      environment = excluded.environment,
-                      attributes = excluded.attributes,
-                      event_payload = excluded.event_payload,
-                      normalized_pointer = excluded.normalized_pointer,
-                      raw_pointer = excluded.raw_pointer,
-                      raw_retention_state = excluded.raw_retention_state,
-                      updated_at = excluded.updated_at
-                    """).format(hei=hei),
-                    {
-                        **row,
-                        "environment": json.dumps(row["environment"]),
-                        "attributes": json.dumps(row["attributes"]),
-                        "event_payload": json.dumps(row["event_payload"]),
-                        "normalized_pointer": json.dumps(row["normalized_pointer"]),
-                        "raw_pointer": json.dumps(row["raw_pointer"]) if row["raw_pointer"] is not None else None,
-                    },
-                )
-                cur.execute(
-                    sql.SQL("""
-                    insert into {pe} (
-                      event_id, observed_at, payload
-                    ) values (
-                      %(event_id)s, %(observed_at)s, %(payload)s::jsonb
-                    )
-                    on conflict (event_id) do update set
-                      observed_at = excluded.observed_at,
-                      payload = excluded.payload
-                    """).format(pe=pe),
-                    {
-                        "event_id": row["event_id"],
-                        "observed_at": row["observed_at"],
-                        "payload": json.dumps(row["event_payload"]),
-                    },
-                )
-            stale_event_ids = _select_stale_tenant_ids(
-                cur,
-                table=HOT_EVENT_INDEX_TABLE,
-                tenant_id=workspace.tenant_id,
-                id_column="event_id",
-                current_ids=event_ids,
-            )
-            _delete_rows_by_ids(cur, table=PROJECTED_EVENTS_TABLE, id_column="event_id", ids=stale_event_ids)
-            _delete_tenant_rows_by_ids(
-                cur,
-                table=DETECTION_EVENT_EDGE_TABLE,
-                tenant_id=workspace.tenant_id,
-                id_column="event_id",
-                ids=stale_event_ids,
-            )
-            _delete_tenant_rows_by_ids(
-                cur,
-                table=HOT_EVENT_INDEX_TABLE,
-                tenant_id=workspace.tenant_id,
-                id_column="event_id",
-                ids=stale_event_ids,
-            )
+
+            # Upsert any JSON-based events (test/legacy path)
+            if normalized_events:
+                upsert_event_rows(cur, workspace, normalized_events)
+
+            # Upsert detections — look up anchor timestamps from postgres
+            hei = _tbl(HOT_EVENT_INDEX_TABLE)
             for detection in detections:
-                if not detection["event_ids"] or detection["event_ids"][0] not in event_lookup:
+                if not detection["event_ids"]:
                     continue
-                anchor_event = event_lookup[detection["event_ids"][0]]
+                anchor_id = detection["event_ids"][0]
+                cur.execute(
+                    sql.SQL("select observed_at from {hei} where event_id = %s").format(hei=hei),
+                    (anchor_id,),
+                )
+                row = cur.fetchone()
+                observed_at = row["observed_at"] if row else None
+                if observed_at is None:
+                    # Fall back to evidence timestamp
+                    for ev in detection.get("evidence", []):
+                        if ev.get("observed_at"):
+                            observed_at = ev["observed_at"]
+                            break
+                if observed_at is None:
+                    continue
                 cur.execute(
                     sql.SQL("""
                     insert into {pd} (
@@ -445,20 +458,21 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                     {
                         "tenant_id": workspace.tenant_id,
                         "detection_id": detection["detection_id"],
-                        "observed_at": anchor_event["observed_at"],
+                        "observed_at": observed_at,
                         "payload": json.dumps(detection),
                     },
                 )
                 cur.execute(
-                    sql.SQL("""
-                    delete from {dee}
-                    where tenant_id = %s and detection_id = %s
-                    """).format(dee=dee),
+                    sql.SQL("delete from {dee} where tenant_id = %s and detection_id = %s").format(dee=dee),
                     (workspace.tenant_id, detection["detection_id"]),
                 )
                 for ordinal, event_id in enumerate(detection["event_ids"]):
-                    linked_event = event_lookup.get(event_id)
-                    if linked_event is None:
+                    cur.execute(
+                        sql.SQL("select observed_at from {hei} where event_id = %s").format(hei=hei),
+                        (event_id,),
+                    )
+                    ev_row = cur.fetchone()
+                    if ev_row is None:
                         continue
                     cur.execute(
                         sql.SQL("""
@@ -475,7 +489,7 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                             "event_id": event_id,
                             "ordinal": ordinal,
                             "link_role": "anchor" if ordinal == 0 else "supporting",
-                            "observed_at": linked_event["observed_at"],
+                            "observed_at": ev_row["observed_at"],
                             "created_at": _now_timestamp(),
                         },
                     )
@@ -487,17 +501,13 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
                 current_ids=detection_ids,
             )
             _delete_tenant_rows_by_ids(
-                cur,
-                table=PROJECTED_DETECTIONS_TABLE,
-                tenant_id=workspace.tenant_id,
-                id_column="detection_id",
+                cur, table=PROJECTED_DETECTIONS_TABLE,
+                tenant_id=workspace.tenant_id, id_column="detection_id",
                 ids=stale_detection_ids,
             )
             _delete_tenant_rows_by_ids(
-                cur,
-                table=DETECTION_EVENT_EDGE_TABLE,
-                tenant_id=workspace.tenant_id,
-                id_column="detection_id",
+                cur, table=DETECTION_EVENT_EDGE_TABLE,
+                tenant_id=workspace.tenant_id, id_column="detection_id",
                 ids=stale_detection_ids,
             )
             states = {

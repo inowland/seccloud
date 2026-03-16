@@ -271,6 +271,6 @@ def get_runtime_stream_state(workspace: Workspace) -> dict[str, Any]:
         "cursor": manifest["cursor"],
         "total_source_events": manifest["total_source_events"],
         "complete": manifest["complete"],
-        "normalized_event_count": len(workspace.list_normalized_events()),
+        "normalized_event_count": len(workspace.load_ingest_manifest().get("normalized_event_ids", [])),
         "detection_count": _active_detection_count(workspace),
     }

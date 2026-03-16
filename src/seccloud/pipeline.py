@@ -167,7 +167,7 @@ def normalize_raw_event(workspace: Workspace, raw_event: dict[str, Any], object_
     )
 
 
-def ingest_raw_events(workspace: Workspace) -> dict[str, Any]:
+def ingest_raw_events(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
     workspace.bootstrap()
     manifest = workspace.load_ingest_manifest()
     ingested_raw_ids = set(manifest["raw_event_ids"])
@@ -183,6 +183,8 @@ def ingest_raw_events(workspace: Workspace) -> dict[str, Any]:
     dead_letter_count = 0
     late_arrival_count = 0
     dead_letter_reasons: dict[str, int] = {}
+    batch_events: list[dict[str, Any]] = []
+
     for raw_event in workspace.list_raw_events():
         raw_event_id = raw_event.get("source_event_id", "unknown")
         source = raw_event.get("source", "unknown")
@@ -219,9 +221,19 @@ def ingest_raw_events(workspace: Workspace) -> dict[str, Any]:
         normalized_keys.add(event.event_key)
         normalized_ids.add(event.event_id)
         event_payload = event.to_dict()
-        _, created = workspace.write_normalized_event(event_payload)
-        record_normalized_event(workspace, event_payload, created=created)
+        if dsn is None:
+            # Test/legacy path: write individual JSON files
+            workspace.write_normalized_event(event_payload)
+        else:
+            # Scaled path: skip JSON files, keep Parquet lake artifacts
+            workspace.ensure_normalized_lake_artifacts(event_payload)
+        record_normalized_event(workspace, event_payload, created=True)
+        batch_events.append(event_payload)
         added_normalized += 1
+
+    # Project events to postgres inline (single connection for the batch)
+    if dsn is not None and batch_events:
+        _project_events_inline(workspace, batch_events, dsn)
 
     workspace.save_ingest_manifest(
         {
@@ -243,6 +255,24 @@ def ingest_raw_events(workspace: Workspace) -> dict[str, Any]:
         "dead_letter_count": dead_letter_count,
         "dead_letter_reasons": dead_letter_reasons,
     }
+
+
+def _project_events_inline(
+    workspace: Workspace, events: list[dict[str, Any]], dsn: str,
+) -> None:
+    """Project a batch of normalized events directly to postgres."""
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+        from seccloud.projection_store import ensure_projection_schema, upsert_event_rows
+
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            ensure_projection_schema(conn)
+            with conn.cursor() as cur:
+                upsert_event_rows(cur, workspace, events)
+            conn.commit()
+    except Exception:
+        pass  # Non-fatal — projection sync will catch up
 
 
 def _update_profile(state: dict[str, Any], event: dict[str, Any]) -> None:
@@ -460,8 +490,8 @@ def sanitize_ops_metadata(payload: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def collect_ops_metadata(workspace: Workspace) -> dict[str, Any]:
-    normalized_events = workspace.list_normalized_events()
-    sources = Counter(item["source"] for item in normalized_events)
+    source_stats = workspace.load_source_stats().get("sources", {})
+    sources = {s: stats.get("normalized_event_count", 0) for s, stats in source_stats.items()}
     dead_letters = workspace.list_dead_letters()
     metadata = sanitize_ops_metadata(
         {

@@ -40,9 +40,12 @@ def _count_recent_buckets(buckets: dict[str, int], anchor: str | None, *, days: 
 
 def build_source_capability_matrix(workspace: Workspace) -> dict[str, Any]:
     source_stats = workspace.load_source_stats().get("sources", {})
-    if not source_stats and (
-        workspace.list_raw_events() or workspace.list_normalized_events() or workspace.list_dead_letters()
-    ):
+    has_data = (
+        workspace.load_ingest_manifest().get("normalized_event_ids")
+        or workspace.list_raw_events()
+        or workspace.list_dead_letters()
+    )
+    if not source_stats and has_data:
         rebuild_source_stats(workspace)
         source_stats = workspace.load_source_stats().get("sources", {})
 
