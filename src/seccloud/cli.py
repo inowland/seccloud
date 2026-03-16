@@ -106,6 +106,19 @@ def build_operator_runtime_status(
     }
 
 
+def _reset_projection(dsn: str) -> None:
+    """Clear all projected data from postgres."""
+    try:
+        import psycopg
+
+        from seccloud.projection_store import reset_projection_schema
+
+        with psycopg.connect(dsn) as conn:
+            reset_projection_schema(conn)
+    except Exception:
+        pass
+
+
 def bootstrap_local_runtime(
     workspace: Workspace,
     *,
@@ -116,6 +129,7 @@ def bootstrap_local_runtime(
     dsn = postgres.get("dsn") or local_postgres_dsn(runtime_root)
     stream_manifest_path = workspace.manifests_dir / "runtime_stream_manifest.json"
     if reset_stream or not stream_manifest_path.exists():
+        _reset_projection(dsn)
         stream = initialize_runtime_stream(workspace, scaled=True)
     else:
         stream = {
