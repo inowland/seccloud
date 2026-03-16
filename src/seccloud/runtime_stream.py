@@ -73,6 +73,25 @@ def _build_legacy_source_events() -> tuple[list[dict[str, Any]], dict[str, bool]
     return all_events, dataset.expectations
 
 
+def _normalized_event_count(workspace: Workspace) -> int:
+    """Get the count of normalized events, preferring postgres over manifest."""
+    try:
+        from seccloud.local_postgres import local_postgres_dsn
+        from seccloud.projection_store import HOT_EVENT_INDEX_TABLE, _tbl, default_projection_dsn
+        import psycopg
+        from psycopg.rows import dict_row
+        dsn = default_projection_dsn()
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                hei = _tbl(HOT_EVENT_INDEX_TABLE)
+                cur.execute(psycopg.sql.SQL(
+                    "select count(*) as n from {hei} where tenant_id = %s"
+                ).format(hei=hei), (workspace.tenant_id,))
+                return cur.fetchone()["n"]
+    except Exception:
+        return len(workspace.load_ingest_manifest().get("normalized_event_ids", []))
+
+
 def _active_detection_count(workspace: Workspace) -> int:
     return sum(1 for detection in workspace.list_detections() if detection.get("status", "open") == "open")
 
@@ -271,6 +290,6 @@ def get_runtime_stream_state(workspace: Workspace) -> dict[str, Any]:
         "cursor": manifest["cursor"],
         "total_source_events": manifest["total_source_events"],
         "complete": manifest["complete"],
-        "normalized_event_count": len(workspace.load_ingest_manifest().get("normalized_event_ids", [])),
+        "normalized_event_count": _normalized_event_count(workspace),
         "detection_count": _active_detection_count(workspace),
     }
