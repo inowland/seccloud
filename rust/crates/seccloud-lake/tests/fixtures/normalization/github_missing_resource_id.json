@@ -1,0 +1,22 @@
+{
+  "name": "github_missing_resource_id",
+  "raw_event": {
+    "source": "github",
+    "source_event_id": "gh_evt_missing_resource",
+    "observed_at": "2026-03-15T18:00:00Z",
+    "received_at": "2026-03-15T18:00:30Z",
+    "actor_email": "erin@example.com",
+    "actor_name": "Erin Example",
+    "department": "engineering",
+    "role": "engineer",
+    "event_type": "view",
+    "resource_name": "seccloud/private",
+    "resource_kind": "repo",
+    "sensitivity": "internal",
+    "vendor_event_type": "repo.view"
+  },
+  "expected": {
+    "kind": "dead_letter",
+    "reason": "missing_required_fields:resource_id"
+  }
+}

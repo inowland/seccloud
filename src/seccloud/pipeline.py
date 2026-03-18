@@ -4,9 +4,10 @@ from collections import Counter
 from datetime import timedelta
 from typing import Any
 
-from seccloud.contracts import Action, DerivedState, Event, EvidencePointer, Principal, Resource
+from seccloud.contracts import Action, Event, EvidencePointer, Principal, Resource
+from seccloud.detection_context import ensure_detection_context
 from seccloud.ids import entity_key, event_key
-from seccloud.scoring import build_embedding, score_event
+from seccloud.scoring import DetectionBaseline, score_event
 from seccloud.stats_projector import record_dead_letter, record_normalized_event, record_raw_event
 from seccloud.storage import Workspace, parse_timestamp, write_json
 from seccloud.synthetic import generate_synthetic_dataset
@@ -222,10 +223,10 @@ def ingest_raw_events(workspace: Workspace, dsn: str | None = None) -> dict[str,
         normalized_ids.add(event.event_id)
         event_payload = event.to_dict()
         if dsn is None:
-            # Test/legacy path: write individual JSON files
+            # Local path: write canonical normalized lake artifacts
             workspace.write_normalized_event(event_payload)
         else:
-            # Scaled path: skip JSON files, keep Parquet lake artifacts
+            # Projection-backed path: normalized lake artifacts only
             workspace.ensure_normalized_lake_artifacts(event_payload)
         record_normalized_event(workspace, event_payload, created=True)
         batch_events.append(event_payload)
@@ -278,109 +279,22 @@ def _project_events_inline(
         pass  # Non-fatal — projection sync will catch up
 
 
-def _update_profile(state: dict[str, Any], event: dict[str, Any]) -> None:
-    profiles = state.setdefault("principal_profiles", {})
-    access_histories = state.setdefault("access_histories", {})
-    aggregates = state.setdefault("aggregates", {})
-    peer_groups = state.setdefault("peer_groups", {})
-    embeddings = state.setdefault("embeddings", {})
-    principal_id = event["principal"]["id"]
-    peer_group = event["principal"]["department"]
-    profile = profiles.setdefault(
-        principal_id,
-        {
-            "total_events": 0,
-            "action_counts": {},
-            "resource_counts": {},
-            "seen_geos": [],
-            "peer_group": peer_group,
-            "last_seen": None,
-        },
-    )
-    action_counts = Counter(profile["action_counts"])
-    resource_counts = Counter(profile["resource_counts"])
-    action_counts[event["action"]["verb"]] += 1
-    resource_counts[event["resource"]["id"]] += 1
-    profile["total_events"] += 1
-    profile["action_counts"] = dict(action_counts)
-    profile["resource_counts"] = dict(resource_counts)
-    profile["last_seen"] = event["observed_at"]
-    geo = event["attributes"].get("geo")
-    if geo and geo not in profile["seen_geos"]:
-        profile["seen_geos"].append(geo)
-
-    peer = peer_groups.setdefault(peer_group, {"resource_counts": {}, "principal_ids": []})
-    if principal_id not in peer["principal_ids"]:
-        peer["principal_ids"].append(principal_id)
-    peer_resource_counts = Counter(peer["resource_counts"])
-    peer_resource_counts[event["resource"]["id"]] += 1
-    peer["resource_counts"] = dict(peer_resource_counts)
-
-    history = access_histories.setdefault(
-        event["resource"]["id"],
-        {"resource_name": event["resource"]["name"], "principal_ids": [], "event_ids": []},
-    )
-    if principal_id not in history["principal_ids"]:
-        history["principal_ids"].append(principal_id)
-    history["event_ids"].append(event["event_id"])
-
-    aggregates.setdefault("events_by_source", {})
-    aggregate_counts = Counter(aggregates["events_by_source"])
-    aggregate_counts[event["source"]] += 1
-    aggregates["events_by_source"] = dict(aggregate_counts)
-    aggregates["total_events"] = sum(aggregate_counts.values())
-
-    peer_resource_count = peer["resource_counts"].get(event["resource"]["id"], 0)
-    embeddings[principal_id] = build_embedding(event, profile, peer_resource_count)
-
-
-def _replay_precomputed_detections(workspace: Workspace) -> dict[str, Any]:
-    """Emit pre-computed ML detections based on current stream cursor.
-
-    Reads the pre-computed detection manifest and the stream cursor.
-    Any detection with ``trigger_cursor <= cursor`` that hasn't been
-    written yet gets saved to the workspace.
-    """
-    from seccloud.ml_scoring import deserialize_precomputed
-    from seccloud.storage import read_json
-
-    manifest_path = workspace.manifests_dir / "runtime_stream_manifest.json"
-    stream_manifest = read_json(manifest_path, {"cursor": 0})
-    cursor = stream_manifest.get("cursor", 0)
-
-    precomputed_path = workspace.manifests_dir / "precomputed_detections.json"
-    precomputed_data = read_json(precomputed_path, [])
-    detections = deserialize_precomputed(precomputed_data)
-
-    existing_detection_ids = {item["detection_id"] for item in workspace.list_detections()}
-
-    new_det_dicts: list[dict[str, Any]] = []
-    for pdet in detections:
-        if pdet.trigger_cursor > cursor:
-            continue
-        det = pdet.detection
-        if det.detection_id in existing_detection_ids:
-            continue
-        # Resolve event_keys to event_ids via the identity manifest
-        resolved_event_ids = []
-        for ek in det.event_ids:
-            eid = workspace.allocate_event_id(ek)
-            resolved_event_ids.append(eid)
-        det_dict = det.to_dict()
-        det_dict["event_ids"] = resolved_event_ids
-        workspace.save_detection(det_dict)
-        existing_detection_ids.add(det.detection_id)
-        new_det_dicts.append(det_dict)
-
-    # Project new detections to postgres immediately so they appear in the
-    # UI without waiting for the full event projection sync.
-    if new_det_dicts:
-        _project_detections_fast(workspace, new_det_dicts)
-
+def _compact_derived_state(
+    *,
+    aggregates: dict[str, Any],
+    case_artifacts: dict[str, Any],
+    feedback_labels: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
     return {
-        "normalized_event_count": cursor,
-        "new_detection_count": len(new_det_dicts),
-        "total_detection_count": len(existing_detection_ids),
+        "principal_profiles": {},
+        "peer_groups": {},
+        "access_histories": {},
+        "aggregates": dict(aggregates),
+        "embeddings": {},
+        "case_artifacts": dict(case_artifacts),
+        "feedback_labels": dict(feedback_labels),
+        "metadata": dict(metadata),
     }
 
 
@@ -444,33 +358,46 @@ def _project_detections_fast(
 
 
 def build_derived_state_and_detections(workspace: Workspace) -> dict[str, Any]:
-    # Check for pre-computed ML detections (M0.5 scaled mode)
-    precomputed_path = workspace.manifests_dir / "precomputed_detections.json"
-    if precomputed_path.exists():
-        return _replay_precomputed_detections(workspace)
-
-    # Original heuristic scoring path
-    normalized_events = workspace.list_normalized_events()
-    state = DerivedState().to_dict()
+    # Heuristic scoring path backed by persisted event context.
+    event_index = workspace.ensure_event_index()
+    detection_context = ensure_detection_context(workspace)
+    prior_state = workspace.load_derived_state()
     existing_detection_ids = {item["detection_id"] for item in workspace.list_detections()}
     new_detections = 0
 
-    for event in normalized_events:
-        detection = score_event(event, state)
+    for event_id in detection_context.get("ordered_event_ids", []):
+        event = event_index.get("events_by_id", {}).get(event_id)
+        if not isinstance(event, dict):
+            continue
+        context = detection_context.get("contexts_by_event_id", {}).get(event_id, {})
+        baseline = DetectionBaseline(
+            prior_event_count=int(context.get("principal_total_events", 0)),
+            prior_action_count=int(context.get("action_count", 0)),
+            prior_resource_count=int(context.get("resource_count", 0)),
+            peer_resource_count=int(context.get("peer_resource_count", 0)),
+            geo_history_count=int(context.get("geo_history_count", 0)),
+            geo_seen_before=bool(context.get("geo_seen_before", False)),
+        )
+        detection = score_event(event, baseline)
         if detection and detection.detection_id not in existing_detection_ids:
             workspace.save_detection(detection.to_dict())
             existing_detection_ids.add(detection.detection_id)
             new_detections += 1
-        _update_profile(state, event)
 
-    state.setdefault("case_artifacts", {})
-    state.setdefault("feedback_labels", {})
-    state.setdefault("metadata", {})
-    state["metadata"]["rebuild_source"] = "normalized_segments"
-    state["metadata"]["normalized_event_count"] = len(normalized_events)
-    workspace.save_derived_state(state)
+    metadata = dict(prior_state.get("metadata", {}))
+    metadata["rebuild_source"] = "event_index_detection_context"
+    metadata["normalized_event_count"] = int(detection_context.get("event_count", 0))
+    metadata["detection_context_version"] = int(detection_context.get("context_version", 1))
+    workspace.save_derived_state(
+        _compact_derived_state(
+            aggregates=dict(detection_context.get("aggregates", {})),
+            case_artifacts=dict(prior_state.get("case_artifacts", {})),
+            feedback_labels=dict(prior_state.get("feedback_labels", {})),
+            metadata=metadata,
+        )
+    )
     return {
-        "normalized_event_count": len(normalized_events),
+        "normalized_event_count": int(detection_context.get("event_count", 0)),
         "new_detection_count": new_detections,
         "total_detection_count": len(existing_detection_ids),
     }

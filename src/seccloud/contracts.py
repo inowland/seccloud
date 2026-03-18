@@ -137,6 +137,7 @@ class Detection:
     related_entity_ids: list[str]
     evidence: list[EvidencePointer]
     model_version: str
+    model_rationale: dict[str, Any] | None = None
     status: str = "open"
 
     def to_dict(self) -> dict[str, Any]:
@@ -153,6 +154,7 @@ class Detection:
             "related_entity_ids": self.related_entity_ids,
             "evidence": [pointer.to_dict() for pointer in self.evidence],
             "model_version": self.model_version,
+            "model_rationale": self.model_rationale,
             "status": self.status,
         }
 

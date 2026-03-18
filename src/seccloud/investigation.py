@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from seccloud.contracts import Case
+from seccloud.detection_context import ensure_detection_context
+from seccloud.feature_lake import load_feature_lake_snapshot
 from seccloud.ids import new_prefixed_id
 from seccloud.projection_store import (
     fetch_detection_linked_events,
@@ -11,6 +13,43 @@ from seccloud.projection_store import (
     fetch_timeline_events,
 )
 from seccloud.storage import Workspace, parse_timestamp
+
+
+def _empty_peer_context() -> dict[str, Any]:
+    return {
+        "principal_role": "unknown",
+        "principal_location": "unknown",
+        "principal_privilege_level": "regular",
+        "peer_group_resource_principal_count": 0,
+        "department_peer_count": 0,
+        "manager_peer_count": 0,
+        "group_peer_count": 0,
+    }
+
+
+def _behavior_context_from_detection_context(
+    workspace: Workspace,
+    anchor_event: dict[str, Any],
+) -> dict[str, Any]:
+    event_id = anchor_event.get("event_id")
+    if not isinstance(event_id, str) or not event_id:
+        return {
+            "principal_prior_event_count": 0,
+            "principal_prior_action_count": 0,
+            "principal_prior_resource_access_count": 0,
+            "peer_group_resource_access_count": 0,
+            "geo_seen_before": False,
+        }
+    context = ensure_detection_context(workspace).get("contexts_by_event_id", {}).get(event_id, {})
+    geo = anchor_event.get("attributes", {}).get("geo")
+    seen_geos = {item for item in context.get("seen_geos", []) if isinstance(item, str) and item}
+    return {
+        "principal_prior_event_count": int(context.get("principal_total_events", 0)),
+        "principal_prior_action_count": int(context.get("action_count", 0)),
+        "principal_prior_resource_access_count": int(context.get("resource_count", 0)),
+        "peer_group_resource_access_count": int(context.get("peer_resource_count", 0)),
+        "geo_seen_before": bool(context.get("geo_seen_before", isinstance(geo, str) and geo in seen_geos)),
+    }
 
 
 def list_detections(workspace: Workspace) -> list[dict[str, Any]]:
@@ -80,12 +119,6 @@ def _persist_case_artifact(workspace: Workspace, case: dict[str, Any]) -> None:
     workspace.save_derived_state(derived_state)
 
 
-def _matches_entity_reference(entity: dict[str, Any], reference: str | None) -> bool:
-    if reference is None:
-        return True
-    return entity.get("id") == reference or entity.get("entity_id") == reference
-
-
 def get_entity_timeline(
     workspace: Workspace,
     principal_id: str | None = None,
@@ -101,16 +134,11 @@ def get_entity_timeline(
             limit=limit,
             dsn=dsn,
         )
-    events = workspace.list_normalized_events()
-    selected = []
-    for event in events:
-        if not _matches_entity_reference(event["principal"], principal_id):
-            continue
-        if not _matches_entity_reference(event["resource"], resource_id):
-            continue
-        selected.append(event)
-    selected.sort(key=lambda item: (item["observed_at"], item["event_id"]), reverse=True)
-    return selected[:limit]
+    return workspace.query_indexed_events(
+        principal_reference=principal_id,
+        resource_reference=resource_id,
+        limit=limit,
+    )
 
 
 def build_evidence_bundle(workspace: Workspace, detection_id: str) -> dict[str, Any]:
@@ -135,12 +163,8 @@ def get_event_detail(workspace: Workspace, event_id: str, dsn: str | None = None
         indexed = fetch_hot_event_detail(tenant_id=workspace.tenant_id, event_id=event_id, dsn=dsn)
         if indexed is not None:
             return indexed["event_payload"]
-    # Only fall back to full file scan when no DSN (test/CLI usage).
-    # At scale, scanning 50K+ files per event lookup is too slow.
     if dsn is None:
-        for event in workspace.list_normalized_events():
-            if event["event_id"] == event_id:
-                return event
+        return workspace.get_indexed_event(event_id)
     return None
 
 
@@ -160,11 +184,15 @@ def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | No
             "principal_id": detection.get("related_entity_ids", ["unknown"])[0],
             "peer_group": "unknown",
             "resource_id": "unknown",
+            **_empty_peer_context(),
             "principal_total_events": 0,
+            "principal_prior_event_count": 0,
+            "principal_prior_action_count": 0,
             "principal_prior_resource_access_count": 0,
             "peer_group_resource_access_count": 0,
             "peer_group_principal_count": 0,
             "detection_reasons": detection["reasons"],
+            "geo_seen_before": False,
         }
 
     principal_id = anchor_event["principal"]["id"]
@@ -175,22 +203,165 @@ def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | No
     if dsn is not None:
         counts = _peer_counts_from_postgres(dsn, workspace.tenant_id, principal_id, peer_group, resource_id)
         if counts is not None:
-            return {**counts, "detection_reasons": detection["reasons"]}
+            return {
+                **counts,
+                **_peer_context_from_feature_lake(workspace, anchor_event),
+                **_behavior_context_from_detection_context(workspace, anchor_event),
+                "detection_reasons": detection["reasons"],
+            }
 
-    # Fall back to derived state (heuristic path / tests)
-    derived_state = workspace.load_derived_state()
-    peer_state = derived_state.get("peer_groups", {}).get(peer_group, {})
-    profile = derived_state.get("principal_profiles", {}).get(principal_id, {})
-    peer_resource_count = peer_state.get("resource_counts", {}).get(resource_id, 0)
+    feature_counts = _peer_counts_from_feature_lake(workspace, anchor_event)
+    if feature_counts is not None:
+        return {
+            **feature_counts,
+            **_behavior_context_from_detection_context(workspace, anchor_event),
+            "detection_reasons": detection["reasons"],
+        }
+
+    event_scan_counts = _peer_counts_from_event_scan(workspace, anchor_event)
+    if event_scan_counts is not None:
+        return {
+            **event_scan_counts,
+            **_behavior_context_from_detection_context(workspace, anchor_event),
+            "detection_reasons": detection["reasons"],
+        }
+
     return {
         "principal_id": principal_id,
         "peer_group": peer_group,
         "resource_id": resource_id,
-        "principal_total_events": profile.get("total_events", 0),
-        "principal_prior_resource_access_count": profile.get("resource_counts", {}).get(resource_id, 0),
-        "peer_group_resource_access_count": peer_resource_count,
-        "peer_group_principal_count": len(peer_state.get("principal_ids", [])),
+        **_empty_peer_context(),
+        "principal_total_events": 0,
+        "principal_prior_event_count": 0,
+        "principal_prior_action_count": 0,
+        "principal_prior_resource_access_count": 0,
+        "peer_group_resource_access_count": 0,
+        "peer_group_principal_count": 0,
         "detection_reasons": detection["reasons"],
+        "geo_seen_before": False,
+    }
+
+
+def _peer_context_from_feature_lake(
+    workspace: Workspace,
+    anchor_event: dict[str, Any],
+) -> dict[str, Any]:
+    snapshot = load_feature_lake_snapshot(workspace)
+    principal_entity_key = anchor_event.get("principal", {}).get("entity_key")
+    resource_entity_key = anchor_event.get("resource", {}).get("entity_key")
+    if not isinstance(principal_entity_key, str) or not isinstance(resource_entity_key, str):
+        return _empty_peer_context()
+
+    static_by_key = {row.principal_entity_key: row for row in snapshot.static_rows}
+    static_row = static_by_key.get(principal_entity_key)
+    if static_row is None:
+        return _empty_peer_context()
+
+    peer_rows = [row for row in snapshot.peer_group_rows if row.principal_entity_key == principal_entity_key]
+    department_peer_keys = {row.peer_entity_key for row in peer_rows if row.peer_type == "department"}
+    manager_peer_keys = {row.peer_entity_key for row in peer_rows if row.peer_type == "manager"}
+    group_peer_keys = {row.peer_entity_key for row in peer_rows if row.peer_type == "group"}
+    if not department_peer_keys:
+        department_peer_keys = {
+            row.principal_entity_key
+            for row in snapshot.static_rows
+            if row.department == static_row.department and row.principal_entity_key != principal_entity_key
+        }
+
+    peer_group_resource_principal_count = len(
+        {
+            row.principal_entity_key
+            for row in snapshot.action_rows
+            if row.resource_entity_key == resource_entity_key
+            and (row.principal_entity_key == principal_entity_key or row.principal_entity_key in department_peer_keys)
+        }
+    )
+
+    return {
+        "principal_role": static_row.role,
+        "principal_location": static_row.location,
+        "principal_privilege_level": static_row.privilege_level,
+        "peer_group_resource_principal_count": peer_group_resource_principal_count,
+        "department_peer_count": len(department_peer_keys),
+        "manager_peer_count": len(manager_peer_keys),
+        "group_peer_count": len(group_peer_keys),
+    }
+
+
+def _peer_counts_from_feature_lake(
+    workspace: Workspace,
+    anchor_event: dict[str, Any],
+) -> dict[str, Any] | None:
+    snapshot = load_feature_lake_snapshot(workspace)
+    principal_entity_key = anchor_event.get("principal", {}).get("entity_key")
+    principal_id = anchor_event.get("principal", {}).get("id")
+    resource_id = anchor_event.get("resource", {}).get("id")
+    resource_entity_key = anchor_event.get("resource", {}).get("entity_key")
+    if (
+        not isinstance(principal_entity_key, str)
+        or not isinstance(principal_id, str)
+        or not isinstance(resource_id, str)
+        or not isinstance(resource_entity_key, str)
+    ):
+        return None
+
+    static_by_key = {row.principal_entity_key: row for row in snapshot.static_rows}
+    static_row = static_by_key.get(principal_entity_key)
+    if static_row is None:
+        return None
+
+    department_peer_keys = {
+        row.peer_entity_key
+        for row in snapshot.peer_group_rows
+        if row.principal_entity_key == principal_entity_key and row.peer_type == "department"
+    }
+    department_member_keys = {principal_entity_key, *department_peer_keys}
+    if len(department_member_keys) == 1:
+        department_member_keys = {
+            row.principal_entity_key for row in snapshot.static_rows if row.department == static_row.department
+        }
+    if not department_member_keys:
+        return None
+
+    principal_total_events = sum(
+        row.access_count for row in snapshot.action_rows if row.principal_entity_key == principal_entity_key
+    )
+
+    return {
+        "principal_id": principal_id,
+        "peer_group": static_row.department,
+        "resource_id": resource_id,
+        **_peer_context_from_feature_lake(workspace, anchor_event),
+        "principal_total_events": principal_total_events,
+        "peer_group_principal_count": len(department_member_keys),
+    }
+
+
+def _peer_counts_from_event_scan(
+    workspace: Workspace,
+    anchor_event: dict[str, Any],
+) -> dict[str, Any] | None:
+    principal_id = anchor_event.get("principal", {}).get("id")
+    peer_group = anchor_event.get("principal", {}).get("department")
+    resource_id = anchor_event.get("resource", {}).get("id")
+    if not isinstance(principal_id, str) or not isinstance(peer_group, str) or not isinstance(resource_id, str):
+        return None
+
+    principal_events = workspace.query_indexed_events(principal_reference=principal_id)
+    peer_group_events = workspace.query_indexed_events(department=peer_group)
+    peer_group_principal_ids = {
+        event.get("principal", {}).get("id")
+        for event in peer_group_events
+        if isinstance(event.get("principal", {}).get("id"), str)
+    }
+
+    return {
+        "principal_id": principal_id,
+        "peer_group": peer_group,
+        "resource_id": resource_id,
+        **_peer_context_from_feature_lake(workspace, anchor_event),
+        "principal_total_events": len(principal_events),
+        "peer_group_principal_count": len(peer_group_principal_ids),
     }
 
 
@@ -221,24 +392,6 @@ def _peer_counts_from_postgres(
 
                 cur.execute(
                     psycopg.sql.SQL(
-                        "select count(*) as n from {hei}"
-                        " where tenant_id = %s and principal_id = %s and resource_id = %s"
-                    ).format(hei=hei),
-                    (tenant_id, principal_id, resource_id),
-                )
-                prior_access = cur.fetchone()["n"]
-
-                cur.execute(
-                    psycopg.sql.SQL(
-                        "select count(*) as n from {hei}"
-                        " where tenant_id = %s and principal_department = %s and resource_id = %s"
-                    ).format(hei=hei),
-                    (tenant_id, peer_group, resource_id),
-                )
-                peer_access = cur.fetchone()["n"]
-
-                cur.execute(
-                    psycopg.sql.SQL(
                         "select count(distinct principal_id) as n from {hei}"
                         " where tenant_id = %s and principal_department = %s"
                     ).format(hei=hei),
@@ -251,8 +404,6 @@ def _peer_counts_from_postgres(
             "peer_group": peer_group,
             "resource_id": resource_id,
             "principal_total_events": total_events,
-            "principal_prior_resource_access_count": prior_access,
-            "peer_group_resource_access_count": peer_access,
             "peer_group_principal_count": peer_count,
         }
     except Exception:
@@ -293,11 +444,14 @@ def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[
         if detection_id in existing_case.get("detection_ids", []):
             return existing_case
     detection = workspace.get_detection(detection_id)
-    timeline = []
+    timeline = set(detection.get("event_ids", []))
     evidence_snapshots = []
-    for event in workspace.list_normalized_events():
-        if event["event_id"] in detection["event_ids"] or event["principal"]["id"] in detection["related_entity_ids"]:
-            timeline.append(event["event_id"])
+    if detection.get("related_entity_ids"):
+        for event in workspace.query_indexed_events(principal_reference=detection["related_entity_ids"][0]):
+            event_id = event.get("event_id")
+            if isinstance(event_id, str):
+                timeline.add(event_id)
+    timeline_ids = sorted(timeline)
     for item in build_evidence_bundle(workspace, detection_id)["evidence_items"]:
         evidence_snapshots.append(
             {
@@ -310,7 +464,7 @@ def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[
     groupable_case = _find_groupable_case(workspace, detection)
     if groupable_case is not None:
         groupable_case["detection_ids"] = sorted(set(groupable_case.get("detection_ids", []) + [detection_id]))
-        groupable_case["timeline_event_ids"] = sorted(set(groupable_case.get("timeline_event_ids", []) + timeline))
+        groupable_case["timeline_event_ids"] = sorted(set(groupable_case.get("timeline_event_ids", []) + timeline_ids))
         existing_pointers = {
             item["pointer"]["object_key"]
             for item in groupable_case.get("evidence_snapshots", [])
@@ -326,7 +480,7 @@ def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[
     case = Case(
         case_id=new_prefixed_id("cas"),
         detection_ids=[detection_id],
-        timeline_event_ids=timeline,
+        timeline_event_ids=timeline_ids,
         evidence_snapshots=evidence_snapshots,
         status="open",
         disposition=None,

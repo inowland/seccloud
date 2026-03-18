@@ -1,0 +1,77 @@
+{
+  "name": "okta_login",
+  "raw_event": {
+    "source": "okta",
+    "source_event_id": "okta_evt_001",
+    "observed_at": "2026-03-15T14:00:00Z",
+    "received_at": "2026-03-15T14:02:00Z",
+    "actor_email": "alice@example.com",
+    "actor_name": "Alice Example",
+    "department": "security",
+    "role": "security-admin",
+    "event_type": "login",
+    "resource_id": "okta:app/admin-console",
+    "resource_name": "Admin Console",
+    "resource_kind": "app",
+    "sensitivity": "high",
+    "geo": "US-CA",
+    "ip": "203.0.113.10",
+    "privileged": true,
+    "vendor_event_type": "user.session.start"
+  },
+  "expected": {
+    "kind": "normalized",
+    "event": {
+      "action": {
+        "category": "authentication",
+        "source": "okta",
+        "verb": "login"
+      },
+      "attributes": {
+        "geo": "US-CA",
+        "ip": "203.0.113.10",
+        "privileged": true,
+        "received_at": "2026-03-15T14:02:00Z",
+        "vendor_event_type": "user.session.start"
+      },
+      "environment": {
+        "source_kind": "identity"
+      },
+      "event_id": "event::evk_a21e01a08fe9dd51bebd5310",
+      "event_key": "evk_a21e01a08fe9dd51bebd5310",
+      "evidence": {
+        "object_key": "raw/tenant=local/source=okta/integration=default/dt=2026-03-15/hour=14/evk_a21e01a08fe9dd51bebd5310.json",
+        "observed_at": "2026-03-15T14:00:00Z",
+        "raw_event_id": "okta_evt_001",
+        "source": "okta"
+      },
+      "integration_id": null,
+      "observed_at": "2026-03-15T14:00:00Z",
+      "principal": {
+        "attributes": {
+          "role": "security-admin"
+        },
+        "department": "security",
+        "display_name": "Alice Example",
+        "email": "alice@example.com",
+        "entity_id": "entity::enk_f3b86525c079e940e6657616",
+        "entity_key": "enk_f3b86525c079e940e6657616",
+        "id": "alice@example.com",
+        "kind": "human",
+        "provider": "okta"
+      },
+      "resource": {
+        "attributes": {},
+        "entity_id": "entity::enk_480df7359cf5b3035e0f540d",
+        "entity_key": "enk_480df7359cf5b3035e0f540d",
+        "id": "okta:app/admin-console",
+        "kind": "app",
+        "name": "Admin Console",
+        "provider": "okta",
+        "sensitivity": "high"
+      },
+      "source": "okta",
+      "source_event_id": "okta_evt_001"
+    }
+  }
+}

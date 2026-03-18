@@ -70,13 +70,13 @@ type Detection = components["schemas"]["Detection"];
 type SourceCapabilityMatrix = JsonResponse<"/api/source-capability", "get">;
 type SourceCapabilityDetails = components["schemas"]["SourceCapabilityDetails"];
 type Pagination = components["schemas"]["Pagination"];
-type StreamState = components["schemas"]["StreamState"];
+type RuntimeStatus = JsonResponse<"/api/runtime-status", "get">;
 interface AppData {
   overview: Overview;
   detections: DetectionList;
   events: EventList;
   sourceCapability: SourceCapabilityMatrix;
-  streamState: StreamState;
+  runtimeStatus: RuntimeStatus;
 }
 
 interface Counts {
@@ -106,15 +106,10 @@ interface DetailPaneProps {
   openEventPage: (eventId: string) => void;
 }
 
-interface StreamOverlayProps {
-  busy: boolean;
-  streamState: StreamState;
-  performAction: (path: string) => Promise<void>;
-}
-
 interface IntegrationDetailPaneProps {
   entry: IntegrationEntry | null;
   formatObservedAt: (value: string) => string;
+  runtimeStatus: RuntimeStatus | null;
   titleHref?: string;
 }
 
@@ -197,11 +192,6 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 });
 const numberFormatter = new Intl.NumberFormat("en-US");
 
-const emptyStreamState: StreamState = {
-  cursor: 0,
-  total_source_events: 0,
-  complete: false,
-};
 const emptyPagination: Pagination = {
   limit: 0,
   offset: 0,
@@ -287,7 +277,7 @@ async function fetchDashboardData(
   queueOffset: number,
   eventsOffset: number,
 ): Promise<AppData> {
-  const [overview, detections, events, sourceCapability, streamState] =
+  const [overview, detections, events, sourceCapability, runtimeStatus] =
     await Promise.all([
       fetchJson<Overview>("/api/overview"),
       fetchJson<DetectionList>(
@@ -297,7 +287,7 @@ async function fetchDashboardData(
         buildListUrl("/api/events", eventsPageSize, eventsOffset),
       ),
       fetchJson<SourceCapabilityMatrix>("/api/source-capability"),
-      fetchJson<StreamState>("/api/stream/state"),
+      fetchJson<RuntimeStatus>("/api/runtime-status"),
     ]);
 
   return {
@@ -305,7 +295,7 @@ async function fetchDashboardData(
     detections,
     events,
     sourceCapability,
-    streamState,
+    runtimeStatus,
   };
 }
 
@@ -316,7 +306,7 @@ function applyDashboardData(
     setDetections: (value: DetectionList) => void;
     setEvents: (value: EventList) => void;
     setSourceCapability: (value: SourceCapabilityMatrix) => void;
-    setStreamState: (value: StreamState) => void;
+    setRuntimeStatus: (value: RuntimeStatus) => void;
     setError: (value: string) => void;
   },
 ) {
@@ -325,7 +315,7 @@ function applyDashboardData(
     actions.setDetections(data.detections);
     actions.setEvents(data.events);
     actions.setSourceCapability(data.sourceCapability);
-    actions.setStreamState(data.streamState);
+    actions.setRuntimeStatus(data.runtimeStatus);
   });
   actions.setError("");
 }
@@ -1566,6 +1556,7 @@ function DetailPane({
 function IntegrationDetailPane({
   entry,
   formatObservedAt,
+  runtimeStatus,
   titleHref,
 }: IntegrationDetailPaneProps) {
   if (!entry) {
@@ -1588,54 +1579,9 @@ function IntegrationDetailPane({
         integrationActionItems={integrationActionItems}
         integrationCoverageCount={integrationCoverageCount}
         integrationStatus={integrationStatus}
+        runtimeStatus={runtimeStatus}
       />
     </Section>
-  );
-}
-
-function StreamOverlay({
-  busy,
-  streamState,
-  performAction,
-}: StreamOverlayProps) {
-  return (
-    <div className="stream-overlay">
-      <div className="stream-overlay__header">
-        <span className="eyebrow">Demo Control</span>
-        <span className="stream-overlay__status">
-          {streamState.complete ? "Complete" : "Streaming"}
-        </span>
-      </div>
-      <div className="stream-overlay__stats">
-        <div className="stream-overlay__stat">
-          <span className="stream-overlay__stat-value">
-            {formatNumber(streamState.cursor ?? 0)}/
-            {formatNumber(streamState.total_source_events ?? 0)}
-          </span>
-          <span className="stream-overlay__stat-label">released</span>
-        </div>
-        <div className="stream-overlay__stat">
-          <span className="stream-overlay__stat-value">
-            {formatNumber(streamState.normalized_event_count ?? 0)}
-          </span>
-          <span className="stream-overlay__stat-label">processed</span>
-        </div>
-        <div className="stream-overlay__stat">
-          <span className="stream-overlay__stat-value">
-            {formatNumber(streamState.detection_count)}
-          </span>
-          <span className="stream-overlay__stat-label">detections</span>
-        </div>
-      </div>
-      <div className="stream-overlay__actions">
-        <button
-          disabled={busy}
-          onClick={() => performAction("/api/stream/advance?batch_size=5000")}
-        >
-          Advance 5K
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -1658,7 +1604,6 @@ export function App() {
   const [queueOffset, setQueueOffset] = useState(0);
   const [eventsOffset, setEventsOffset] = useState(0);
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [streamState, setStreamState] = useState<StreamState>(emptyStreamState);
   const [detections, setDetections] = useState<DetectionList>({
     items: [],
     page: emptyPagination,
@@ -1669,6 +1614,9 @@ export function App() {
   });
   const [sourceCapability, setSourceCapability] =
     useState<SourceCapabilityMatrix | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
+    null,
+  );
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
   const [selectedIntegrationSource, setSelectedIntegrationSource] = useState<
     string | null
@@ -1697,7 +1645,6 @@ export function App() {
   const [splitPaneWidth, setSplitPaneWidth] = useState(
     readStoredSplitPaneWidth,
   );
-  const [busy, setBusy] = useState(false);
   const [detailBusy, setDetailBusy] = useState(
     initialRoute.kind === "detection" || initialRoute.kind === "event",
   );
@@ -1715,7 +1662,7 @@ export function App() {
         setDetections,
         setEvents,
         setSourceCapability,
-        setStreamState,
+        setRuntimeStatus,
         setError,
       });
     } catch (loadError) {
@@ -1732,7 +1679,7 @@ export function App() {
           setDetections,
           setEvents,
           setSourceCapability,
-          setStreamState,
+          setRuntimeStatus,
           setError,
         });
       } catch (loadError) {
@@ -1924,23 +1871,6 @@ export function App() {
 
   function openIntegrationPage(source: string) {
     navigateToRoute({ kind: "integration", source });
-  }
-
-  async function performAction(path: string) {
-    setBusy(true);
-    try {
-      await fetchJson(path, { method: "POST" });
-      await refreshDashboard();
-      if (selectedItem?.type === "detection") {
-        await selectDetection(selectedItem.id);
-      } else if (selectedItem?.type === "event") {
-        await selectEvent(selectedItem.id);
-      }
-    } catch (actionError) {
-      setError(getErrorMessage(actionError));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function selectDetection(detectionId: string) {
@@ -2136,6 +2066,7 @@ export function App() {
                     integrationActionItems={integrationActionItems}
                     integrationCoverageCount={integrationCoverageCount}
                     integrationStatus={integrationStatus}
+                    runtimeStatus={runtimeStatus}
                   />
                 ) : (
                   <EmptyState
@@ -2633,6 +2564,7 @@ export function App() {
                   <IntegrationDetailPane
                     entry={selectedIntegrationEntry}
                     formatObservedAt={formatObservedAt}
+                    runtimeStatus={runtimeStatus}
                     titleHref={
                       selectedIntegrationEntry
                         ? routeToHref({
@@ -2744,12 +2676,6 @@ export function App() {
           </div>
         }
         width={navPaneWidth}
-      />
-
-      <StreamOverlay
-        busy={busy}
-        streamState={streamState}
-        performAction={performAction}
       />
     </div>
   );

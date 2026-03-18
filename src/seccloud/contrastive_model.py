@@ -739,3 +739,97 @@ def train(
         losses.append(epoch_loss)
 
     return losses
+
+
+def evaluate_sampled_retrieval(
+    model: FacadeModel,
+    feature_set: FeatureSet,
+    cat_vocabs: dict[str, dict[str, int]],
+    config: ModelConfig,
+    *,
+    pairs: list[TrainingSample] | None = None,
+    device: torch.device | None = None,
+    seed: int = 42,
+    max_eval_pairs: int | None = 512,
+) -> dict[str, float | int]:
+    """Evaluate trained ranking quality against sampled negative contexts.
+
+    This reuses the same sampled-negative structure as training and reports a
+    small set of stable local metrics suitable for activation gating.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+
+    evaluation_pairs = pairs if pairs is not None else build_training_pairs(feature_set)
+    if not evaluation_pairs:
+        return {
+            "evaluated_pair_count": 0,
+            "sampled_top1_accuracy": 0.0,
+            "pairwise_win_rate": 0.0,
+            "mean_margin": 0.0,
+            "mean_positive_distance": 0.0,
+            "mean_negative_distance": 0.0,
+        }
+
+    dataset = FacadeDataset(feature_set, evaluation_pairs, cat_vocabs, config, rng_seed=seed)
+    eval_count = min(len(dataset), max_eval_pairs) if max_eval_pairs is not None else len(dataset)
+    top1_hits = 0
+    pairwise_wins = 0
+    margin_sum = 0.0
+    positive_sum = 0.0
+    negative_sum = 0.0
+    positive_distances: list[float] = []
+    negative_distance_means: list[float] = []
+
+    def _percentile(values: list[float], fraction: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        index = int(round((len(ordered) - 1) * fraction))
+        index = max(0, min(index, len(ordered) - 1))
+        return float(ordered[index])
+
+    with torch.no_grad():
+        for index in range(eval_count):
+            sample = dataset[index]
+            action_embedding = model.encode_action(
+                sample["source"],
+                sample["action_indices"].unsqueeze(0).to(device),
+                sample["action_weights"].unsqueeze(0).to(device),
+                sample["action_mask"].unsqueeze(0).to(device),
+            )[0]
+            natural_embedding = model.encode_context(
+                {key: value.unsqueeze(0).to(device) for key, value in sample["natural_context"].items()}
+            )[0]
+            negative_embeddings = model.encode_context(
+                {key: value.to(device) for key, value in sample["synthetic_contexts"].items()}
+            )
+
+            positive_distance = float(1.0 - torch.dot(action_embedding, natural_embedding).item())
+            negative_distances = 1.0 - torch.matmul(negative_embeddings, action_embedding)
+            min_negative_distance = float(negative_distances.min().item())
+            mean_negative_distance = float(negative_distances.mean().item())
+            margin = mean_negative_distance - positive_distance
+
+            top1_hits += int(positive_distance <= min_negative_distance)
+            pairwise_wins += int(positive_distance < mean_negative_distance)
+            margin_sum += margin
+            positive_sum += positive_distance
+            negative_sum += mean_negative_distance
+            positive_distances.append(positive_distance)
+            negative_distance_means.append(mean_negative_distance)
+
+    denominator = float(max(eval_count, 1))
+    return {
+        "evaluated_pair_count": eval_count,
+        "sampled_top1_accuracy": top1_hits / denominator,
+        "pairwise_win_rate": pairwise_wins / denominator,
+        "mean_margin": margin_sum / denominator,
+        "mean_positive_distance": positive_sum / denominator,
+        "mean_negative_distance": negative_sum / denominator,
+        "positive_distance_p95": _percentile(positive_distances, 0.95),
+        "negative_distance_p50": _percentile(negative_distance_means, 0.50),
+        "negative_distance_p90": _percentile(negative_distance_means, 0.90),
+    }

@@ -1,0 +1,32 @@
+[package]
+name = "seccloud-lake"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+aws = ["dep:aws-config", "dep:aws-sdk-s3", "dep:aws-sdk-dynamodb"]
+
+[dependencies]
+anyhow.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+parquet.workspace = true
+seccloud-pipeline.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+aws-config = { workspace = true, optional = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio.workspace = true

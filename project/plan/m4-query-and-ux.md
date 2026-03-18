@@ -1,10 +1,23 @@
-# M4: Query Layer & Investigation UX
+# M4: Investigation UX & Demo Experience
 
 ## Goal
 
-Build the investigation experience that makes detections actionable for SOC analysts.
-A detection is only valuable if an analyst can quickly understand what happened, assess
-severity, and decide on a response.
+Build the investigation experience that turns the runtime into a genuinely compelling
+demo. A detection is only valuable if an analyst can quickly understand what
+happened, assess severity, decide on a response, and feel that the system is alive,
+fast, and coherent.
+
+The starting point for M4 is stronger than the original draft assumed:
+
+- the API already exposes detection detail, timelines, peer comparison, runtime
+  status, and case flows
+- Postgres-backed hot projection and hot event index already exist
+- the UI already consumes durable event-index, feature-table, and detection-context
+  state for the demo
+
+So M4 is not "invent the query substrate." It is "turn the existing projected and
+indexed runtime into a production-grade analyst experience and the strongest
+possible live demo."
 
 ## Success Criteria
 
@@ -18,35 +31,41 @@ severity, and decide on a response.
    and model attributions that produced it.
 5. **Case management**: analysts can group detections, add notes, assign cases, and
    track resolution.
+6. **Demo narrative**: the UI supports a guided “what changed, why it fired, what
+   else is related, what should I do next” flow without needing backend-only
+   explanations.
 
 ## Architecture
 
-### Query Service (Rust)
+### Query Service
 
 ```
-API Request ──► Rust Query Service
+API Request ──► Query Service
                     │
-                    ├── Hot path: DynamoDB/Postgres for recent detections and events
-                    ├── Warm path: S3 Parquet scan for historical data
-                    └── Cold path: S3 scan with partition pruning for deep investigation
+                    ├── Hot path: Postgres for recent detections and events
+                    ├── Warm path: object-store Parquet scan for historical data
+                    └── Cold path: object-store scan with partition pruning for deep investigation
 ```
 
-- Stateless HTTP/gRPC service on EKS
-- Query routing: recent data (< 24h) from DynamoDB, historical from S3 Parquet
+- The current implementation is Python/FastAPI backed by Postgres projection plus
+  workspace/lake readers; a Rust query service remains optional, not assumed
+- Stateless HTTP/gRPC service on EKS remains a valid future target if Python query
+  handling becomes the bottleneck
+- Query routing: recent data (< 24h) from Postgres, historical from S3 Parquet
 - Partition pruning: use lake layout (tenant/date/hour) to minimize S3 scans
 - Result caching: in-memory LRU cache per pod (not shared cache — keeps it stateless)
 
 ### Hot Event Index
 
-- DynamoDB table with recent normalized events (retention: 7-14 days)
-- Partitioned by tenant + principal_key, sorted by timestamp
+- Postgres-backed hot event index with recent normalized events (retention: 7-14 days)
+- Partitioned and indexed by tenant + principal_key + timestamp
 - Supports: entity timeline queries, peer comparison lookups, detection evidence
   resolution
 - Populated by projection workers (write-behind from S3)
 
 ### Investigation API
 
-Extends the current FastAPI endpoints (may migrate to Rust later):
+Extends the current FastAPI endpoints (may migrate selective hot paths later if needed):
 
 - `GET /detections` — paginated detection list with filters
 - `GET /detections/{id}` — full detection with evidence, attributions, entity context
@@ -58,7 +77,7 @@ Extends the current FastAPI endpoints (may migrate to Rust later):
 
 ### Frontend (React)
 
-Evolve the current PoC frontend:
+Evolve the current frontend rather than replacing it:
 
 - **Detection queue**: prioritized by severity and score, filterable by source,
   scenario type, principal
@@ -68,28 +87,35 @@ Evolve the current PoC frontend:
   current behavior visualization
 - **Case workspace**: group related detections, collaborative notes, status tracking
 - **Dashboard**: detection volume trends, model health, source coverage
+- **Guided demo flow**: support a presenter path that can move from queue →
+  detection → entity → case while surfacing model/runtime health alongside the
+  investigation itself
 
 ## Key Decisions
 
-- **DynamoDB for hot index, not Postgres**: DynamoDB handles the access pattern
-  (point lookups by principal + time range) more efficiently and scales without
-  connection management overhead in BYOC environments.
-- **Postgres for cases and structured queries**: case management, analyst workflows,
-  and complex queries (joins, aggregations) stay in Postgres.
-- **API layer stays Python initially**: FastAPI is productive for investigation
-  workflows where latency requirements are human-scale (< 1s). Migrate to Rust
-  only if Python becomes a bottleneck.
+- **Postgres for hot index and cases**: keep the recent event index, case
+  management, analyst workflows, and complex queries on one serving substrate
+  until it is clearly the bottleneck.
+- **API/query layer stays Python until proven otherwise**: the current FastAPI
+  layer already serves the demo well, and the hot-query substrate is Postgres.
+  Migrate specific hot paths to Rust only if latency or concurrency data says it is
+  necessary.
+- **Demo polish outranks backend replacement**: if a choice is between a brand-new
+  query stack and a more legible, faster, better explained investigation flow, pick
+  the latter.
 
 ## Dependencies
 
-- M3: detections in S3 and projected to hot stores
-- M2: normalized events in S3 with entity keys for timeline queries
+- M3: durable scored detections and model-backed scoring outputs
+- M2: projected events, hot event index, entity keys, and durable runtime status
 
 ## Deliverables
 
-1. Rust query service for event timeline and entity history.
-2. DynamoDB hot event index design and projection workers.
+1. Investigation/query contract refresh grounded in the existing Postgres and
+   event-index runtime.
+2. Postgres hot event index hardening and projection/query optimizations.
 3. Investigation API (detection detail, entity timeline, peer comparison, cases).
 4. Production React frontend with detection queue, detail view, entity view, and
    case management.
 5. Evidence bundling for export and compliance.
+6. Guided demo flow that makes the system easy to present live.

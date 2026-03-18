@@ -19,6 +19,7 @@ from seccloud.api_models import (
     IntakeAccepted,
     IntakeRequest,
     Overview,
+    RuntimeStatus,
     SourceCapabilityMatrix,
     StreamAdvance,
     StreamReset,
@@ -38,6 +39,7 @@ from seccloud.projection_store import (
     fetch_projection_overview,
     sync_workspace_projection,
 )
+from seccloud.runtime_status import build_runtime_status
 from seccloud.runtime_stream import (
     advance_runtime_stream,
     get_runtime_stream_state,
@@ -176,6 +178,10 @@ def create_app() -> FastAPI:
     @app.get("/api/workers/state", response_model=WorkerState)
     def worker_state() -> dict:
         return get_worker_state(workspace())
+
+    @app.get("/api/runtime-status", response_model=RuntimeStatus)
+    def runtime_status() -> dict:
+        return build_runtime_status(workspace(), dsn=dsn, runtime_root=Path.cwd())
 
     @app.post("/api/stream/reset", response_model=StreamReset)
     def stream_reset() -> dict:

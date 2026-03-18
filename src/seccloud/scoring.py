@@ -14,24 +14,23 @@ class DetectorContribution:
     attributions: dict[str, float] = field(default_factory=dict)
 
 
-def build_embedding(event: dict[str, Any], profile: dict[str, Any], peer_resource_count: int) -> list[float]:
-    return [
-        float(profile.get("total_events", 0)),
-        float(profile.get("action_counts", {}).get(event["action"]["verb"], 0)),
-        float(profile.get("resource_counts", {}).get(event["resource"]["id"], 0)),
-        float(peer_resource_count),
-        1.0 if event["attributes"].get("external") else 0.0,
-        1.0 if event["resource"]["sensitivity"] in {"high", "critical"} else 0.0,
-    ]
+@dataclass(slots=True)
+class DetectionBaseline:
+    prior_event_count: int = 0
+    prior_action_count: int = 0
+    prior_resource_count: int = 0
+    peer_resource_count: int = 0
+    geo_history_count: int = 0
+    geo_seen_before: bool = False
 
 
 def _principal_novelty_detector(
     event: dict[str, Any],
-    profile: dict[str, Any],
+    baseline: DetectionBaseline,
 ) -> DetectorContribution:
-    total_events = profile.get("total_events", 0)
-    seen_action_count = profile.get("action_counts", {}).get(event["action"]["verb"], 0)
-    seen_resource_count = profile.get("resource_counts", {}).get(event["resource"]["id"], 0)
+    total_events = baseline.prior_event_count
+    seen_action_count = baseline.prior_action_count
+    seen_resource_count = baseline.prior_resource_count
     contribution = DetectorContribution()
     if total_events >= 3 and seen_action_count == 0:
         contribution.reasons.append("principal_has_not_performed_this_action_before")
@@ -45,7 +44,6 @@ def _principal_novelty_detector(
 
 
 def _peer_rarity_detector(
-    event: dict[str, Any],
     total_events: int,
     peer_resource_count: int,
 ) -> DetectorContribution:
@@ -78,12 +76,11 @@ def _sensitivity_and_exfil_detector(event: dict[str, Any]) -> DetectorContributi
     return contribution
 
 
-def _geo_anomaly_detector(event: dict[str, Any], profile: dict[str, Any]) -> DetectorContribution:
+def _geo_anomaly_detector(event: dict[str, Any], baseline: DetectionBaseline) -> DetectorContribution:
     contribution = DetectorContribution()
-    total_events = profile.get("total_events", 0)
-    has_geo_history = bool(profile.get("seen_geos"))
-    geo = event["attributes"].get("geo")
-    if event["source"] == "okta" and total_events >= 3 and has_geo_history and geo not in profile.get("seen_geos", []):
+    total_events = baseline.prior_event_count
+    has_geo_history = baseline.geo_history_count > 0
+    if event["source"] == "okta" and total_events >= 3 and has_geo_history and not baseline.geo_seen_before:
         contribution.reasons.append("login_from_unfamiliar_geography")
         contribution.attributions["new_geo"] = 0.2
         contribution.score_delta += 0.2
@@ -91,7 +88,7 @@ def _geo_anomaly_detector(event: dict[str, Any], profile: dict[str, Any]) -> Det
         event["source"] == "okta"
         and total_events >= 3
         and has_geo_history
-        and geo not in profile.get("seen_geos", [])
+        and not baseline.geo_seen_before
         and event["attributes"].get("privileged")
     ):
         contribution.reasons.append("privileged_login_combines_unfamiliar_geo_and_sensitive_access")
@@ -141,19 +138,15 @@ def _fuse_contributions(contributions: list[DetectorContribution]) -> tuple[floa
     return max(0.0, min(score, 0.99)), reasons, attributions
 
 
-def score_event(event: dict[str, Any], state: dict[str, Any]) -> Detection | None:
-    profiles = state.setdefault("principal_profiles", {})
-    peer_groups = state.setdefault("peer_groups", {})
-    profile = profiles.get(event["principal"]["id"], {})
-    peer_group = event["principal"]["department"]
-    peer_resources = peer_groups.get(peer_group, {}).get("resource_counts", {})
-    peer_resource_count = peer_resources.get(event["resource"]["id"], 0)
-
+def score_event(
+    event: dict[str, Any],
+    baseline: DetectionBaseline,
+) -> Detection | None:
     contributions = [
-        _principal_novelty_detector(event, profile),
-        _peer_rarity_detector(event, profile.get("total_events", 0), peer_resource_count),
+        _principal_novelty_detector(event, baseline),
+        _peer_rarity_detector(baseline.prior_event_count, baseline.peer_resource_count),
         _sensitivity_and_exfil_detector(event),
-        _geo_anomaly_detector(event, profile),
+        _geo_anomaly_detector(event, baseline),
         _volume_detector(event),
         _context_suppression_detector(event),
     ]

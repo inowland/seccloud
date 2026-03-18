@@ -1,0 +1,75 @@
+{
+  "name": "snowflake_export",
+  "raw_event": {
+    "source": "snowflake",
+    "source_event_id": "sf_evt_001",
+    "observed_at": "2026-03-15T17:00:00Z",
+    "received_at": "2026-03-15T17:03:00Z",
+    "actor_email": "dana@example.com",
+    "actor_name": "Dana Example",
+    "department": "data",
+    "role": "data-analyst",
+    "event_type": "export",
+    "resource_id": "snowflake:dataset/finance.payroll",
+    "resource_name": "finance.payroll",
+    "resource_kind": "dataset",
+    "sensitivity": "restricted",
+    "rows_read": 24000,
+    "warehouse": "WH_FINANCE",
+    "vendor_event_type": "COPY"
+  },
+  "expected": {
+    "kind": "normalized",
+    "event": {
+      "action": {
+        "category": "data_access",
+        "source": "snowflake",
+        "verb": "export"
+      },
+      "attributes": {
+        "received_at": "2026-03-15T17:03:00Z",
+        "rows_read": 24000,
+        "vendor_event_type": "COPY",
+        "warehouse": "WH_FINANCE"
+      },
+      "environment": {
+        "source_kind": "dataset"
+      },
+      "event_id": "event::evk_b78ee75ba18e4a532b4223cb",
+      "event_key": "evk_b78ee75ba18e4a532b4223cb",
+      "evidence": {
+        "object_key": "raw/tenant=local/source=snowflake/integration=default/dt=2026-03-15/hour=17/evk_b78ee75ba18e4a532b4223cb.json",
+        "observed_at": "2026-03-15T17:00:00Z",
+        "raw_event_id": "sf_evt_001",
+        "source": "snowflake"
+      },
+      "integration_id": null,
+      "observed_at": "2026-03-15T17:00:00Z",
+      "principal": {
+        "attributes": {
+          "role": "data-analyst"
+        },
+        "department": "data",
+        "display_name": "Dana Example",
+        "email": "dana@example.com",
+        "entity_id": "entity::enk_2408fe150d91fc90d6876f16",
+        "entity_key": "enk_2408fe150d91fc90d6876f16",
+        "id": "dana@example.com",
+        "kind": "human",
+        "provider": "snowflake"
+      },
+      "resource": {
+        "attributes": {},
+        "entity_id": "entity::enk_528c6d882068800ec75a9214",
+        "entity_key": "enk_528c6d882068800ec75a9214",
+        "id": "snowflake:dataset/finance.payroll",
+        "kind": "dataset",
+        "name": "finance.payroll",
+        "provider": "snowflake",
+        "sensitivity": "restricted"
+      },
+      "source": "snowflake",
+      "source_event_id": "sf_evt_001"
+    }
+  }
+}

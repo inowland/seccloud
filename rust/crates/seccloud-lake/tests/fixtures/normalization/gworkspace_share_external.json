@@ -1,0 +1,75 @@
+{
+  "name": "gworkspace_share_external",
+  "raw_event": {
+    "source": "gworkspace",
+    "source_event_id": "gw_evt_001",
+    "observed_at": "2026-03-15T15:00:00Z",
+    "received_at": "2026-03-15T15:01:00Z",
+    "actor_email": "bob@example.com",
+    "actor_name": "Bob Example",
+    "department": "finance",
+    "role": "analyst",
+    "event_type": "share_external",
+    "resource_id": "gworkspace:doc/quarterly-plan",
+    "resource_name": "Quarterly Plan",
+    "resource_kind": "document",
+    "sensitivity": "confidential",
+    "external": true,
+    "target_domain": "partner.example",
+    "vendor_event_type": "share"
+  },
+  "expected": {
+    "kind": "normalized",
+    "event": {
+      "action": {
+        "category": "sharing",
+        "source": "gworkspace",
+        "verb": "share_external"
+      },
+      "attributes": {
+        "external": true,
+        "received_at": "2026-03-15T15:01:00Z",
+        "target_domain": "partner.example",
+        "vendor_event_type": "share"
+      },
+      "environment": {
+        "source_kind": "document"
+      },
+      "event_id": "event::evk_789ce3a224e3f174e5eb339f",
+      "event_key": "evk_789ce3a224e3f174e5eb339f",
+      "evidence": {
+        "object_key": "raw/tenant=local/source=gworkspace/integration=default/dt=2026-03-15/hour=15/evk_789ce3a224e3f174e5eb339f.json",
+        "observed_at": "2026-03-15T15:00:00Z",
+        "raw_event_id": "gw_evt_001",
+        "source": "gworkspace"
+      },
+      "integration_id": null,
+      "observed_at": "2026-03-15T15:00:00Z",
+      "principal": {
+        "attributes": {
+          "role": "analyst"
+        },
+        "department": "finance",
+        "display_name": "Bob Example",
+        "email": "bob@example.com",
+        "entity_id": "entity::enk_52e9ee85af0234b3005ffd71",
+        "entity_key": "enk_52e9ee85af0234b3005ffd71",
+        "id": "bob@example.com",
+        "kind": "human",
+        "provider": "gworkspace"
+      },
+      "resource": {
+        "attributes": {},
+        "entity_id": "entity::enk_a2e93403b5c36bea1857672f",
+        "entity_key": "enk_a2e93403b5c36bea1857672f",
+        "id": "gworkspace:doc/quarterly-plan",
+        "kind": "document",
+        "name": "Quarterly Plan",
+        "provider": "google-workspace",
+        "sensitivity": "confidential"
+      },
+      "source": "gworkspace",
+      "source_event_id": "gw_evt_001"
+    }
+  }
+}

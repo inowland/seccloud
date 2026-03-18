@@ -1,0 +1,10 @@
+provider = "snowflake"
+kind = "dataset"
+
+[action_map.query]
+verb = "query"
+category = "data_access"
+
+[action_map.export]
+verb = "export"
+category = "data_access"

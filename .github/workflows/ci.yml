@@ -25,6 +25,16 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
       - name: Sync Python dependencies
         run: uv sync --locked
 
@@ -34,5 +44,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test
+      - name: Rust fmt check
+        run: cd rust && cargo fmt --check
+
+      - name: Rust tests
+        run: cd rust && cargo test
+
+      - name: Python tests
         run: uv run python -m unittest discover -s tests -v

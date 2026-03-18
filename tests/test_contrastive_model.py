@@ -23,6 +23,7 @@ from seccloud.contrastive_model import (
     build_training_pairs,
     collate_facade,
     config_from_features,
+    evaluate_sampled_retrieval,
     huber_like_loss,
     pairwise_ranking_loss,
     tensorize_action,
@@ -522,6 +523,36 @@ class TestTrainEndToEnd(unittest.TestCase):
                 torch.isnan(torch.tensor(loss)),
                 "NaN loss at epoch",
             )
+
+    def test_evaluate_sampled_retrieval_reports_finite_metrics(self):
+        fs = _small_feature_set()
+        cfg = _small_config(fs)
+        vocabs = build_categorical_vocabs(fs)
+        model = FacadeModel(cfg)
+        _ = train(
+            model,
+            fs,
+            vocabs,
+            cfg,
+            device=torch.device("cpu"),
+            seed=42,
+        )
+
+        metrics = evaluate_sampled_retrieval(
+            model,
+            fs,
+            vocabs,
+            cfg,
+            device=torch.device("cpu"),
+            seed=42,
+        )
+
+        self.assertGreater(metrics["evaluated_pair_count"], 0)
+        self.assertGreaterEqual(metrics["sampled_top1_accuracy"], 0.0)
+        self.assertLessEqual(metrics["sampled_top1_accuracy"], 1.0)
+        self.assertGreaterEqual(metrics["pairwise_win_rate"], 0.0)
+        self.assertLessEqual(metrics["pairwise_win_rate"], 1.0)
+        self.assertTrue(torch.isfinite(torch.tensor(metrics["mean_margin"])))
 
 
 # ---------------------------------------------------------------------------

@@ -402,13 +402,12 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
     """Sync detections and stream state to postgres.
 
     Events are projected inline during normalization, so this function
-    only handles detections, detection-event edges, and projection state.
-    For backward compatibility (tests without inline projection), it also
-    upserts any events found in normalized JSON files.
+    only handles detections, detection-event edges, projection state, and
+    local backfill from the durable event index when needed.
     """
     dsn = dsn or default_projection_dsn()
-    # Read JSON-based normalized events only if they exist (test/legacy path)
-    normalized_events = workspace.list_normalized_events()
+    event_index = workspace.ensure_event_index()
+    normalized_events = [event for event in event_index.get("events_by_id", {}).values() if isinstance(event, dict)]
     detections = workspace.list_detections()
     detection_ids = sorted(d["detection_id"] for d in detections)
 
@@ -419,7 +418,7 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
             dee = _tbl(DETECTION_EVENT_EDGE_TABLE)
             ps = _tbl(PROJECTION_STATE_TABLE)
 
-            # Upsert any JSON-based events (test/legacy path)
+            # Backfill projected events from the local durable event index.
             if normalized_events:
                 upsert_event_rows(cur, workspace, normalized_events)
 
@@ -530,7 +529,7 @@ def sync_workspace_projection(workspace: Workspace, dsn: str | None = None) -> d
         conn.commit()
     return {
         "dsn": dsn,
-        "event_count": len(normalized_events),
+        "event_count": int(event_index.get("event_count", len(normalized_events))),
         "detection_count": len(detections),
     }
 

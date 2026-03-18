@@ -125,7 +125,10 @@ def rebuild_source_stats(workspace: Workspace) -> dict[str, Any]:
     for raw_event in workspace.list_raw_events():
         record_raw_event(workspace, raw_event["source"], raw_event, created=True)
 
-    for event in workspace.list_normalized_events():
+    event_index = workspace.ensure_event_index()
+    for event in event_index.get("events_by_id", {}).values():
+        if not isinstance(event, dict):
+            continue
         record_normalized_event(workspace, event, created=True)
 
     for dead_letter in workspace.list_dead_letters():

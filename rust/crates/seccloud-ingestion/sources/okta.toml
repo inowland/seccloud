@@ -1,0 +1,10 @@
+provider = "okta"
+kind = "identity"
+
+[action_map.login]
+verb = "login"
+category = "authentication"
+
+[action_map.admin_change]
+verb = "admin_change"
+category = "administration"

@@ -138,6 +138,7 @@ class PushIngestionTestCase(unittest.TestCase):
         self.assertEqual(body["tenant_id"], self.workspace.tenant_id)
         self.assertEqual(body["integration_id"], "okta-primary")
         self.assertEqual(body["record_count"], 2)
+        self.assertTrue(body["object_key"].endswith(".parquet"))
         self.assertEqual(len(self.workspace.list_pending_intake_batches()), 1)
         self.assertEqual(len(self.workspace.list_normalized_events()), 0)
 
@@ -146,6 +147,7 @@ class PushIngestionTestCase(unittest.TestCase):
         self.assertEqual(manifest["integration_id"], "okta-primary")
         self.assertEqual(manifest["record_count"], 2)
         self.assertEqual(manifest["idempotency_key"], "req-1")
+        self.assertEqual(manifest["objects"][0]["object_format"], "parquet")
 
         batch = self.workspace.list_pending_intake_batches()[0]
         envelopes = self.workspace.read_raw_batch_records(batch)

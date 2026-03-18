@@ -505,3 +505,49 @@ def benchmark_latency(
         action_target_met=all_action_met,
         target_ms=target_ms,
     )
+
+
+def export_model_artifact_bundle(
+    model: FacadeModel,
+    output_dir: Path,
+    *,
+    tenant_id: str,
+    model_id: str,
+    model_version: str | None = None,
+    model_family: str = "contrastive-facade",
+    feature_schema_version: str = "feature.v1",
+    eval_report: dict[str, object] | None = None,
+    principal_entity_keys: list[str] | None = None,
+    resource_entity_keys: list[str] | None = None,
+    categorical_vocabs: dict[str, dict[str, int]] | None = None,
+    score_policy: dict[str, object] | None = None,
+    max_tokens: int = 64,
+    max_windows: int = 64,
+    max_res: int = 16,
+    max_peers: int = 64,
+) -> dict[str, object]:
+    """Export ONNX files plus the M3 model artifact bundle metadata."""
+    from seccloud.model_artifact import write_model_artifact_bundle
+
+    exported = export_model(
+        model,
+        output_dir,
+        max_tokens=max_tokens,
+        max_windows=max_windows,
+        max_res=max_res,
+        max_peers=max_peers,
+    )
+    return write_model_artifact_bundle(
+        exported,
+        output_dir,
+        tenant_id=tenant_id,
+        model_id=model_id,
+        model_version=model_version,
+        model_family=model_family,
+        feature_schema_version=feature_schema_version,
+        eval_report=eval_report,
+        principal_entity_keys=principal_entity_keys,
+        resource_entity_keys=resource_entity_keys,
+        categorical_vocabs=categorical_vocabs,
+        score_policy=score_policy,
+    )

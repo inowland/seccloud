@@ -14,27 +14,27 @@ extension.
 
 ## Success Criteria Assessment
 
-| Criterion | Target | Result | Status |
-|---|---|---|---|
-| FPR < 0.1% at action level | < 0.1% | Not directly measured (principal-level eval) | Deferred to M1 |
-| Detection rate > 80% | > 80% on planted scenarios | 5/6 scenarios ROC AUC > 0.97 at 1K scale | **Pass** (5/6) |
-| Cold-start viability | FPR < 0.5% within 2 weeks | ROC AUC 0.71 at 14 days, 0.74 at 20 days | **Partial** |
-| Model stability | No degradation over 6 months | Not tested (requires drift simulation) | Deferred to M1 |
-| Training tractability | < 8 hours on single GPU for 50K principals | 18 min for 1K on CPU; linear extrapolation feasible | **Likely pass** |
+| Criterion                  | Target                                     | Result                                              | Status          |
+| -------------------------- | ------------------------------------------ | --------------------------------------------------- | --------------- |
+| FPR < 0.1% at action level | < 0.1%                                     | Not directly measured (principal-level eval)        | Deferred to M1  |
+| Detection rate > 80%       | > 80% on planted scenarios                 | 5/6 scenarios ROC AUC > 0.97 at 1K scale            | **Pass** (5/6)  |
+| Cold-start viability       | FPR < 0.5% within 2 weeks                  | ROC AUC 0.71 at 14 days, 0.74 at 20 days            | **Partial**     |
+| Model stability            | No degradation over 6 months               | Not tested (requires drift simulation)              | Deferred to M1  |
+| Training tractability      | < 8 hours on single GPU for 50K principals | 18 min for 1K on CPU; linear extrapolation feasible | **Likely pass** |
 
 ## Detection Results at 1K Principals
 
 The primary evaluation: 1,000 principals, 30 days, 617K events, 20 training
 days with 50% spatial holdout.
 
-| Scenario | ROC AUC | Attacker Rank | Top % |
-|---|---|---|---|
-| account_takeover | **1.000** | #1 / 1000 | 0.1% |
-| departing_employee | **0.999** | #2 / 1000 | 0.2% |
-| slow_exfiltration | **0.996** | #5 / 1000 | 0.5% |
-| privilege_escalation | **0.974** | #27 / 1000 | 2.7% |
-| credential_compromise | **0.970** | #31 / 1000 | 3.1% |
-| insider_collaboration | 0.836 | #82, #248 | 8.2%, 24.8% |
+| Scenario              | ROC AUC   | Attacker Rank | Top %       |
+| --------------------- | --------- | ------------- | ----------- |
+| account_takeover      | **1.000** | #1 / 1000     | 0.1%        |
+| departing_employee    | **0.999** | #2 / 1000     | 0.2%        |
+| slow_exfiltration     | **0.996** | #5 / 1000     | 0.5%        |
+| privilege_escalation  | **0.974** | #27 / 1000    | 2.7%        |
+| credential_compromise | **0.970** | #31 / 1000    | 3.1%        |
+| insider_collaboration | 0.836     | #82, #248     | 8.2%, 24.8% |
 
 **Key observation**: The top 3 scorers out of 1,000 principals are all actual
 attackers. A SOC team reviewing the daily top-10 would catch account takeover,
@@ -56,19 +56,19 @@ Ablations at 100 principals, 10 epochs. Shows relative feature importance.
 
 ### Feature removal impact
 
-| Configuration | Agg ROC AUC | Delta vs Full |
-|---|---|---|
-| no_peers | 0.974 | +0.086 |
-| no_history | 0.931 | +0.043 |
-| no_collaboration | 0.928 | +0.040 |
-| no_static | 0.899 | +0.011 |
-| **full_model** | **0.888** | **baseline** |
-| peers_only | 0.862 | -0.026 |
-| history_only | 0.851 | -0.037 |
+| Configuration    | Agg ROC AUC | Delta vs Full |
+| ---------------- | ----------- | ------------- |
+| no_peers         | 0.974       | +0.086        |
+| no_history       | 0.931       | +0.043        |
+| no_collaboration | 0.928       | +0.040        |
+| no_static        | 0.899       | +0.011        |
+| **full_model**   | **0.888**   | **baseline**  |
+| peers_only       | 0.862       | -0.026        |
+| history_only     | 0.851       | -0.037        |
 
 ### Interpretation
 
-1. **Removing peers *improves* aggregate ROC AUC.** This is counterintuitive
+1. **Removing peers _improves_ aggregate ROC AUC.** This is counterintuitive
    but consistent with the small scale (100 principals). Peer features add
    noise when the peer groups are small and highly overlapping. At 1K+
    principals with richer org structure, peer features should add signal.
@@ -89,14 +89,14 @@ Ablations at 100 principals, 10 epochs. Shows relative feature importance.
 
 ### Scenario-level detail
 
-| Scenario | full | no_hist | no_peers | no_collab | no_static | hist_only | peers_only |
-|---|---|---|---|---|---|---|---|
-| account_takeover | 0.99 | 0.99 | 0.99 | 0.99 | 0.99 | 0.99 | 0.99 |
-| departing_employee | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
-| credential_compromise | 0.98 | 0.98 | 0.98 | 0.98 | 0.97 | 0.89 | 0.98 |
-| slow_exfiltration | 0.85 | 0.96 | 0.94 | 0.82 | 0.92 | 0.98 | 0.88 |
-| privilege_escalation | 0.31 | 0.52 | 0.92 | 0.92 | 0.52 | 0.57 | 0.35 |
-| insider_collaboration | 0.96 | 0.95 | 0.90 | 0.81 | 0.87 | 0.69 | 0.84 |
+| Scenario              | full | no_hist | no_peers | no_collab | no_static | hist_only | peers_only |
+| --------------------- | ---- | ------- | -------- | --------- | --------- | --------- | ---------- |
+| account_takeover      | 0.99 | 0.99    | 0.99     | 0.99      | 0.99      | 0.99      | 0.99       |
+| departing_employee    | 1.00 | 1.00    | 1.00     | 1.00      | 1.00      | 1.00      | 1.00       |
+| credential_compromise | 0.98 | 0.98    | 0.98     | 0.98      | 0.97      | 0.89      | 0.98       |
+| slow_exfiltration     | 0.85 | 0.96    | 0.94     | 0.82      | 0.92      | 0.98      | 0.88       |
+| privilege_escalation  | 0.31 | 0.52    | 0.92     | 0.92      | 0.52      | 0.57      | 0.35       |
+| insider_collaboration | 0.96 | 0.95    | 0.90     | 0.81      | 0.87      | 0.69      | 0.84       |
 
 **privilege_escalation is unstable at 100 principals** — varies from 0.31 to
 0.92 across configurations. At 1K principals it stabilises at 0.97 ROC AUC.
@@ -107,13 +107,13 @@ subtle scenarios.
 
 Training on progressively more history days (100 principals, 10 epochs):
 
-| Training Days | Agg ROC AUC | Notes |
-|---|---|---|
-| 3 | 0.000 | No attack events in test window; insufficient data |
-| 7 | 0.505 | Barely above random; only 1 scenario detectable |
-| 14 | 0.707 | 3 scenarios detectable; cred_compromise already at 0.96 |
-| 20 | 0.743 | 4 scenarios; account_takeover emerges |
-| 25 | 0.935 | 3 scenarios with high AUC; some scenarios not in test window |
+| Training Days | Agg ROC AUC | Notes                                                        |
+| ------------- | ----------- | ------------------------------------------------------------ |
+| 3             | 0.000       | No attack events in test window; insufficient data           |
+| 7             | 0.505       | Barely above random; only 1 scenario detectable              |
+| 14            | 0.707       | 3 scenarios detectable; cred_compromise already at 0.96      |
+| 20            | 0.743       | 4 scenarios; account_takeover emerges                        |
+| 25            | 0.935       | 3 scenarios with high AUC; some scenarios not in test window |
 
 **Cold-start is viable at 2 weeks** (ROC AUC 0.71) and reaches good quality by
 3 weeks (0.74). This meets the plan's target of "acceptable quality within 2
@@ -126,11 +126,11 @@ timeline).
 
 ## Embedding Dimension Study
 
-| Dimension | Agg ROC AUC | Final Loss |
-|---|---|---|
-| d=32 | 0.833 | 0.001399 |
-| **d=64** | **0.939** | **0.001324** |
-| d=128 | 0.922 | 0.001348 |
+| Dimension | Agg ROC AUC | Final Loss   |
+| --------- | ----------- | ------------ |
+| d=32      | 0.833       | 0.001399     |
+| **d=64**  | **0.939**   | **0.001324** |
+| d=128     | 0.922       | 0.001348     |
 
 **d=64 is the sweet spot** at this scale. d=128 slightly overfits (higher loss,
 lower AUC). At larger enterprise scale, d=128 may become optimal — worth

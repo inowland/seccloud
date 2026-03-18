@@ -31,6 +31,7 @@ insider threats using unsupervised contrastive learning on benign data at Google
 ### What Facade Does
 
 **Two-tower scoring model:**
+
 - **Context tower** (E_C): encodes who the principal is — role, peer group, history
   pattern, social network position. Produces a d-dimensional L2-normalized embedding.
 - **Action towers** (E_A): one tower per resource type. Encodes what was accessed —
@@ -39,14 +40,17 @@ insider threats using unsupervised contrastive learning on benign data at Google
   embedding in the same space.
 
 **Scoring function:**
+
 ```
 f(a, c) = d_cos(E_A(a), E_C(c))
 ```
+
 An action is anomalous when its embedding is far from the context embedding in cosine
 distance — i.e., "this resource is not the kind of thing someone in this role/position
 typically accesses."
 
 **Contrastive learning (benign data only):**
+
 - Natural pairs: (action_i, context_i) are real observations — labeled as "normal"
   (negative in contrastive terms).
 - Synthetic positives: (action_i, context_j) where principal_i != principal_j — a
@@ -57,7 +61,7 @@ typically accesses."
 
 **Key theorem:** This objective learns the pointwise mutual information
 P(a,c) / (P(a) * P(c)), meaning the model scores actions as anomalous only when
-they're unexpected *given context*, not just rare in general.
+they're unexpected *given context\*, not just rare in general.
 
 **Action representation:** Each resource is represented by the weighted set of all
 principals who have previously accessed it (weights proportional to access frequency,
@@ -65,6 +69,7 @@ sum to 1). This means the action embedding encodes "what kind of people access t
 resource" without needing resource metadata.
 
 **Context representation:**
+
 - History: stored in non-overlapping 2-hour windows. Each window captures one action
   per distinct resource accessed.
 - Social network: meeting peers (weighted by shared meetings, inversely by meeting
@@ -74,18 +79,22 @@ resource" without needing resource metadata.
 - Context features are refreshed daily (they evolve slower than actions).
 
 **Multi-scale detection via clustering:**
+
 ```
 g(A, c) = sum_{X in G} max_{a in X} f(a, c)
 ```
+
 Hierarchical agglomerative clustering on action embeddings (cosine similarity).
 Redundancy parameter delta groups similar actions. This prevents inflated scores from
 repeated access to the same resource while boosting scores when a principal accesses
-multiple *different* unusual resources.
+multiple _different_ unusual resources.
 
 **Loss function (pairwise ranking):**
+
 ```
 L(B) = (1/N * sum_i (1/P * sum_j l(h + (y_j+ - y_i-) / s))^omega)^(1/omega)
 ```
+
 Where omega emphasizes hard negatives, s is a soft margin, h is a hard margin. The
 pointwise loss l is Huber-like (quadratic near zero, linear far from zero).
 
@@ -99,6 +108,7 @@ retraining. Ranks attackers in top 0.01% of 10^5+ principals.
 ### How We Adapt It
 
 **What stays the same:**
+
 - Two-tower architecture (context + action)
 - Contrastive learning on benign data only
 - Cosine distance scoring
@@ -107,37 +117,37 @@ retraining. Ranks attackers in top 0.01% of 10^5+ principals.
 
 **What changes:**
 
-| Facade (Google) | Our Adaptation | Rationale |
-|---|---|---|
-| 3 resource types (docs, SQL, HTTP) | 4 source types (Okta, Google Workspace, GitHub, Snowflake) | Different source mix; add sources incrementally |
-| Meeting data for social graph | Inferred collaboration from shared resource access | We won't have calendar data initially |
-| Code review peers | GitHub co-contributor graph | Same signal, different source |
-| Manager/cost-center from HRIS | Okta group membership + org attributes | Available in identity provider data |
-| 10^5+ principals | 10K-500K principals | Fortune 500 range; need to validate at lower end |
-| 10^10 actions/year | 10^7-10^9 actions/year | Lower volume per customer; feature quality matters more |
-| TensorFlow + Vizier | PyTorch + simple hyperparameter search | Team preference; less infra dependency |
-| Google internal infrastructure | S3 + local Parquet files | Works locally and in BYOC |
+| Facade (Google)                    | Our Adaptation                                             | Rationale                                               |
+| ---------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------- |
+| 3 resource types (docs, SQL, HTTP) | 4 source types (Okta, Google Workspace, GitHub, Snowflake) | Different source mix; add sources incrementally         |
+| Meeting data for social graph      | Inferred collaboration from shared resource access         | We won't have calendar data initially                   |
+| Code review peers                  | GitHub co-contributor graph                                | Same signal, different source                           |
+| Manager/cost-center from HRIS      | Okta group membership + org attributes                     | Available in identity provider data                     |
+| 10^5+ principals                   | 10K-500K principals                                        | Fortune 500 range; need to validate at lower end        |
+| 10^10 actions/year                 | 10^7-10^9 actions/year                                     | Lower volume per customer; feature quality matters more |
+| TensorFlow + Vizier                | PyTorch + simple hyperparameter search                     | Team preference; less infra dependency                  |
+| Google internal infrastructure     | S3 + local Parquet files                                   | Works locally and in BYOC                               |
 
 **Our source-to-tower mapping:**
 
-| Source | Action Tower | Resource Representation |
-|---|---|---|
-| Okta | Identity events tower | App/resource ID as weighted accessor set |
-| Google Workspace | Document access tower | Document ID as weighted accessor set |
-| GitHub | Code repository tower | Repo ID as weighted accessor set |
-| Snowflake | Data access tower | Table/schema ID as weighted accessor set |
+| Source           | Action Tower          | Resource Representation                  |
+| ---------------- | --------------------- | ---------------------------------------- |
+| Okta             | Identity events tower | App/resource ID as weighted accessor set |
+| Google Workspace | Document access tower | Document ID as weighted accessor set     |
+| GitHub           | Code repository tower | Repo ID as weighted accessor set         |
+| Snowflake        | Data access tower     | Table/schema ID as weighted accessor set |
 
 **Context features we can compute from our sources:**
 
-| Feature | Source | Facade Equivalent |
-|---|---|---|
-| Peer group (department) | Okta user attributes | Cost center peers |
-| Manager hierarchy | Okta org structure | Manager/grand-manager peers |
-| Collaboration graph | Shared resource access patterns | Meeting peers (proxy) |
-| Code review peers | GitHub PR co-authors/reviewers | Code review peers |
-| Job function | Okta role/title attributes | Job family type |
-| Employment duration | Okta account creation date | Employment duration |
-| Geographic pattern | Okta login geo, IP addresses | (not explicitly in Facade) |
+| Feature                 | Source                          | Facade Equivalent           |
+| ----------------------- | ------------------------------- | --------------------------- |
+| Peer group (department) | Okta user attributes            | Cost center peers           |
+| Manager hierarchy       | Okta org structure              | Manager/grand-manager peers |
+| Collaboration graph     | Shared resource access patterns | Meeting peers (proxy)       |
+| Code review peers       | GitHub PR co-authors/reviewers  | Code review peers           |
+| Job function            | Okta role/title attributes      | Job family type             |
+| Employment duration     | Okta account creation date      | Employment duration         |
+| Geographic pattern      | Okta login geo, IP addresses    | (not explicitly in Facade)  |
 
 ---
 
@@ -247,8 +257,8 @@ Per principal, compute and cache (refresh daily or on change):
    - Privilege level (regular, elevated, admin — from Okta group membership)
 
 **Storage:** Feature vectors stored as Parquet files in S3 (or local filesystem for
-M0). Principal profiles stored as a rolling state table (DynamoDB in production,
-SQLite or in-memory dict for M0).
+M0). Principal profiles stored as a rolling state table (Postgres or local durable
+state for the productized path, SQLite or in-memory dict for M0).
 
 **Key design choice:** Following Facade, we intentionally exclude timestamps and
 access modality from the action representation. This prevents the model from learning
@@ -291,6 +301,7 @@ Context Tower:
 ```
 
 **Hyperparameters (starting points, to be tuned):**
+
 - Embedding dimension d: 64 or 128
 - Token embedding dimension d_token: 32 or 64
 - Tower hidden dimensions: [256, 128, d] or [512, 256, d]
@@ -360,16 +371,18 @@ context c:
 1. Compute action embeddings E_A(a) for each a in A.
 2. Cluster actions using hierarchical agglomerative clustering with cosine similarity.
    Merge threshold: delta (hyperparameter).
-3. For each cluster X, take the max anomaly score: max_{a in X} f(a, c).
-4. Sum across clusters: g(A, c) = sum_{X in G} max_{a in X} f(a, c).
+3. For each cluster X, take the max anomaly score: max\_{a in X} f(a, c).
+4. Sum across clusters: g(A, c) = sum*{X in G} max*{a in X} f(a, c).
 
 This means:
+
 - Accessing the same unusual resource 100 times scores the same as accessing it once
   (idempotence via clustering).
-- Accessing 5 *different* unusual resources scores ~5x one unusual access (monotonicity
+- Accessing 5 _different_ unusual resources scores ~5x one unusual access (monotonicity
   via summation across clusters).
 
 **Implementation:**
+
 ```python
 from scipy.cluster.hierarchy import fcluster, linkage
 
@@ -397,6 +410,7 @@ def multi_scale_score(action_embeddings, action_scores, delta):
 **Detection thresholding:**
 
 After computing g(A, c) for each principal in each time window:
+
 - Rank principals by score
 - Detection threshold: top K principals per day (configurable, default K=10 per
   Facade's recommendation for Google-scale)
@@ -487,6 +501,7 @@ class EvaluationHarness:
 identical results, establishing the interface for future Rust integration.
 
 **Steps:**
+
 1. Export both towers to ONNX using torch.onnx.export
 2. Validate numerical equivalence (< 1e-5 max absolute difference)
 3. Benchmark inference latency: target < 1ms per action on CPU
@@ -494,6 +509,7 @@ identical results, establishing the interface for future Rust integration.
    and future Rust inference
 
 **ONNX considerations:**
+
 - The action tower takes variable-size weighted token sets — either pad to max length
   or use a fixed-size hash-based representation
 - The context tower takes the full context feature vector — document the exact layout
@@ -517,6 +533,7 @@ Overlap is intentional — WS2 can begin before WS1 is complete (use small synth
 data first), WS4-5 can begin as soon as WS3 produces initial models.
 
 **Decision point (end of week 8):**
+
 - If success criteria are met → proceed to M1 with confidence
 - If FPR is too high → investigate: is it the model, the features, or the data?
 - If cold-start is too slow → investigate transfer learning, heuristic bridging
@@ -529,6 +546,7 @@ data first), WS4-5 can begin as soon as WS3 produces initial models.
 The existing Python PoC provides:
 
 **Reuse directly:**
+
 - Normalized event schema and contracts (contracts.py)
 - Entity key generation for stable identity (ids.py)
 - Source-specific field mappings (vendor_exports.py)
@@ -536,16 +554,19 @@ The existing Python PoC provides:
 - The 4 source integrations: Okta, Google Workspace, GitHub, Snowflake
 
 **Extend significantly:**
+
 - Synthetic data generator (synthetic.py): from 55 events / 5 principals to 10^6+
   events / 10^3+ principals
 - Feature engineering: from 6-dimensional heuristic vector to Facade-style accessor
   sets and context features
 
 **Baseline to beat:**
+
 - Current heuristic scoring (scoring.py): 6 detectors with hard-coded weights and
   thresholds. The ML approach must strictly dominate this on evaluation metrics.
 
 **Keep running in parallel:**
+
 - The PoC continues as the demo and design-partner vehicle while M0 validates the
   ML approach. Heuristic scoring ships first; ML scoring replaces it when validated.
 
@@ -566,10 +587,10 @@ The existing Python PoC provides:
 
 ## Risk Mitigations
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Synthetic data doesn't reflect real enterprise distributions | Model works on synthetic, fails on real | Validate against CERT dataset; calibrate synthetic distributions against published research; get design partner data ASAP |
-| Contrastive learning produces too many false positives | Product is unusable for SOC teams | Clustering refinement; hierarchical scoring (action → session → principal); tune threshold on validation set |
-| Cold-start period is too long | New customers see no value for weeks | Heuristic-first scoring (current PoC) bridges the gap; transfer learning from base model; pre-computed resource popularity priors |
-| Training is too slow for per-customer fine-tuning | Operational burden, slow onboarding | Profile and optimize data loading; smaller fine-tuning model; freeze base model, only train adapter layers |
-| Facade approach doesn't work at smaller enterprise scale | Fundamental approach failure | This is what M0 validates; if it fails at 10K principals, investigate hybrid approaches (contrastive + supervised on synthetic attacks) |
+| Risk                                                         | Impact                                  | Mitigation                                                                                                                              |
+| ------------------------------------------------------------ | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Synthetic data doesn't reflect real enterprise distributions | Model works on synthetic, fails on real | Validate against CERT dataset; calibrate synthetic distributions against published research; get design partner data ASAP               |
+| Contrastive learning produces too many false positives       | Product is unusable for SOC teams       | Clustering refinement; hierarchical scoring (action → session → principal); tune threshold on validation set                            |
+| Cold-start period is too long                                | New customers see no value for weeks    | Heuristic-first scoring (current PoC) bridges the gap; transfer learning from base model; pre-computed resource popularity priors       |
+| Training is too slow for per-customer fine-tuning            | Operational burden, slow onboarding     | Profile and optimize data loading; smaller fine-tuning model; freeze base model, only train adapter layers                              |
+| Facade approach doesn't work at smaller enterprise scale     | Fundamental approach failure            | This is what M0 validates; if it fails at 10K principals, investigate hybrid approaches (contrastive + supervised on synthetic attacks) |

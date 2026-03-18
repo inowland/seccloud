@@ -1,130 +1,77 @@
-# M5: BYOC Deployment & Operations
+# M5: Scale, Resilience & Benchmarking
 
 ## Goal
 
-Make the system reliably deployable and operable in customer AWS accounts with
-minimal manual intervention. A new customer deployment should take less than 1 day,
-and upgrades should be zero-downtime.
+Prove that the demo is backed by production-shaped software. M5 is about load,
+recovery, and hard evidence: the system should keep ingesting, scoring, projecting,
+and serving investigations while operators can see what is happening in real time.
 
 ## Success Criteria
 
-1. **Deployment time**: new customer environment provisioned and ingesting data
-   within 1 business day.
-2. **Zero-downtime upgrades**: rolling EKS deployments with no event loss or
-   detection gap.
-3. **Self-healing**: workers recover automatically from transient failures (S3
-   throttling, DynamoDB capacity, pod eviction).
-4. **Observability**: control plane has visibility into data plane health across
-   all customer deployments.
-5. **Data isolation**: cryptographic guarantee that no customer data leaves their
-   AWS account.
+1. **Sustained load demo**: run representative enterprise-scale synthetic load and
+   keep ingest/scoring/projection healthy for an extended session.
+2. **Recovery story**: worker restart, projection interruption, dead-letter spikes,
+   and backpressure are observable and recover without manual data surgery.
+3. **Benchmark evidence**: generate repeatable benchmark reports for throughput,
+   lag, detection latency, and investigation read-path responsiveness.
+4. **Operator visibility**: queue depth, projection lag, source health, model mode,
+   and detection volume are visible in one coherent operator surface.
+5. **Demo reliability**: the team can run the live demo repeatedly without
+   rebuilding state by hand between attempts.
 
 ## Architecture
 
-### Control Plane / Data Plane Split
+### Scale Harness
 
 ```
-┌─────────────────────────────────────────┐
-│ Control Plane (our AWS account)         │
-│                                         │
-│  ├── Deployment orchestration           │
-│  ├── Configuration management           │
-│  ├── Health monitoring dashboard        │
-│  ├── Model artifact registry            │
-│  └── Customer management                │
-└────────────────┬────────────────────────┘
-                 │ (TLS, mutual auth)
-                 │ metadata only — no customer data
-                 │
-┌────────────────▼────────────────────────┐
-│ Data Plane (customer AWS account)       │
-│                                         │
-│  ├── EKS cluster                        │
-│  │   ├── Ingestion pods                 │
-│  │   ├── Normalization workers          │
-│  │   ├── Feature engineering workers    │
-│  │   ├── Scoring workers                │
-│  │   ├── Projection workers             │
-│  │   ├── Training jobs (GPU)            │
-│  │   └── API / query service            │
-│  ├── S3 bucket (all data)               │
-│  ├── DynamoDB tables (coordination)     │
-│  ├── RDS Postgres (projection store)    │
-│  └── ALB (ingress)                      │
-└─────────────────────────────────────────┘
+Synthetic scale generator ──► Push gateway / collectors
+                                  │
+                                  ├── Rust worker-service
+                                  ├── Feature + scoring runtime
+                                  ├── Projection / hot index
+                                  └── API + UI + benchmark reporters
 ```
 
-### What Crosses the Boundary
+### Failure And Recovery Drills
 
-Control plane → data plane:
+- restart worker-service during active ingest
+- pause or break projection and verify it catches up
+- inject dead-letter-producing records and observe containment
+- run with oversized load to show queue growth, then recovery after pressure drops
 
-- Container image references (ECR in our account, cross-account pull)
-- Configuration updates (feature flags, model versions, schema versions)
-- Deployment commands (kubectl apply via assumed role)
+### Benchmark Outputs
 
-Data plane → control plane:
+- ingest throughput
+- normalization / feature / detection / projection lag
+- detection volume and score distributions
+- query latency for detection detail and entity timeline
+- dead-letter rate and queue depth over time
 
-- Health metrics (pod status, queue depth, error rates)
-- Deployment status (current versions, rollout state)
-- Aggregate statistics (event volume, detection count — no PII)
+### Observability Surfaces
 
-**Never crosses the boundary**: raw events, normalized events, feature vectors,
-detection details, user identities, or any data that could identify individuals.
-
-### Infrastructure as Code
-
-- Terraform modules for the full data plane stack
-- Parameterized by: AWS region, VPC configuration, instance types, retention
-  policies, source integrations
-- Modules:
-  - `seccloud-eks`: EKS cluster with node groups (CPU + GPU)
-  - `seccloud-storage`: S3 bucket, DynamoDB tables, RDS instance
-  - `seccloud-networking`: VPC, subnets, ALB, security groups
-  - `seccloud-iam`: roles, policies, cross-account trust
-  - `seccloud-workloads`: Kubernetes manifests for all services
-
-### Upgrade Path
-
-1. Build and push new container images to ECR
-2. Update Kubernetes manifests in customer deployment (via control plane)
-3. Rolling deployment: new pods come up, old pods drain using the control message
-   protocol from the M1 core crate:
-   - `Shutdown` signal injected into the pipeline — stops accepting new events
-   - `Flush` signal drains in-memory buffers to S3
-   - `BatchComplete` confirms the last batch is written and manifested
-   - Pod reports ready-to-terminate via readiness probe
-4. Health check gates: new pods must pass readiness checks before old pods terminate
-5. Rollback: revert to previous manifest if health checks fail
-
-### Self-Healing
-
-- Worker pods: liveness and readiness probes, restart on failure
-- S3 throttling: exponential backoff with jitter (built into Rust workers)
-- DynamoDB capacity: on-demand capacity mode (no provisioned throughput to manage)
-- Stale work: DynamoDB TTL on work queue items, workers re-claim stale items
-- State recovery: any hot store can be rebuilt from S3 source of truth. Envelope
-  metadata (batch_id, lineage pointers) provides the checkpoint state needed to
-  resume interrupted pipeline stages without re-processing
+- runtime status as the operator control panel
+- benchmark artifacts checked into the workspace for repeatable comparison
+- “demo health” summaries that explain whether the system is safe to present live
+- comparison views that relate load conditions to investigation responsiveness
 
 ## Key Decisions
 
-- **No SSH access to customer environments**: all operations via Kubernetes API
-  with assumed IAM roles. Audit trail on every action.
-- **ECR cross-account image pull**: images built in our CI, pulled by customer EKS.
-  Customer controls the IAM trust policy.
-- **Terraform, not Pulumi**: broader enterprise adoption, customer infra teams are
-  more likely to be familiar with it.
+- **Benchmark before deploy**: production claims should come from repeatable local
+  or controlled-environment evidence, not architecture diagrams.
+- **Recovery matters as much as peak throughput**: a great demo should show that the
+  system heals and catches up, not just that it can sprint.
+- **Operator trust is part of the product**: queue depth, lag, and failure state
+  must be first-class surfaces, not logs-only internals.
 
 ## Dependencies
 
-- M1-M4: all data plane components deployable on EKS
-- Design partner agreements for AWS account access
+- M1-M4: Rust ingestion/worker runtime, scoring, projection, and investigation UX
+- Synthetic scale scenarios and benchmark harnesses
 
 ## Deliverables
 
-1. Terraform module suite for full data plane deployment.
-2. Control plane service for deployment orchestration and health monitoring.
-3. Cross-account IAM and networking design.
-4. Upgrade and rollback runbook.
-5. Self-healing test suite (fault injection).
-6. Customer onboarding automation (provision → configure → ingest in < 1 day).
+1. Load-generation and benchmark harness for representative enterprise tenants.
+2. Fault-injection and recovery drill suite for the local/shared runtime.
+3. Operator-facing lag, throughput, and health reporting.
+4. Repeatable benchmark reports suitable for demos and internal review.
+5. Demo runbook for reset, warm-up, load, recovery, and live presentation.

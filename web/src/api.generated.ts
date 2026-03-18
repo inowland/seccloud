@@ -55,6 +55,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/runtime-status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Runtime Status */
+    get: operations["runtime_status_api_runtime_status_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/stream/reset": {
     parameters: {
       query?: never;
@@ -266,8 +283,20 @@ export interface components {
       evidence: components["schemas"]["EvidencePointer"][];
       /** Model Version */
       model_version: string;
+      model_rationale?: components["schemas"]["DetectionModelRationale"] | null;
       /** Status */
       status: string;
+    };
+    /** DetectionContextStatus */
+    DetectionContextStatus: {
+      /** Available */
+      available: boolean;
+      /** Event Count */
+      event_count: number;
+      /** Input Signature */
+      input_signature?: string | null;
+      /** Context Version */
+      context_version: number;
     };
     /** DetectionDetail */
     DetectionDetail: {
@@ -288,6 +317,25 @@ export interface components {
       items: components["schemas"]["Detection"][];
       page: components["schemas"]["Pagination"];
     };
+    /** DetectionModelRationale */
+    DetectionModelRationale: {
+      /** Scoring Mode */
+      scoring_mode: string;
+      /** Policy Scope */
+      policy_scope: string;
+      /** Detection Threshold */
+      detection_threshold: number;
+      /** High Severity Threshold */
+      high_severity_threshold: number;
+      /** Model Score */
+      model_score: number;
+      /** Score Margin */
+      score_margin: number;
+      /** Calibration Source */
+      calibration_source?: string | null;
+      /** Calibration Reason */
+      calibration_reason?: string | null;
+    };
     /** DetectionPeerComparison */
     DetectionPeerComparison: {
       /** Principal Id */
@@ -296,14 +344,34 @@ export interface components {
       peer_group: string;
       /** Resource Id */
       resource_id: string;
+      /** Principal Role */
+      principal_role: string;
+      /** Principal Location */
+      principal_location: string;
+      /** Principal Privilege Level */
+      principal_privilege_level: string;
       /** Principal Total Events */
       principal_total_events: number;
+      /** Principal Prior Event Count */
+      principal_prior_event_count: number;
+      /** Principal Prior Action Count */
+      principal_prior_action_count: number;
       /** Principal Prior Resource Access Count */
       principal_prior_resource_access_count: number;
       /** Peer Group Resource Access Count */
       peer_group_resource_access_count: number;
       /** Peer Group Principal Count */
       peer_group_principal_count: number;
+      /** Peer Group Resource Principal Count */
+      peer_group_resource_principal_count: number;
+      /** Department Peer Count */
+      department_peer_count: number;
+      /** Manager Peer Count */
+      manager_peer_count: number;
+      /** Group Peer Count */
+      group_peer_count: number;
+      /** Geo Seen Before */
+      geo_seen_before: boolean;
       /** Detection Reasons */
       detection_reasons: string[];
     };
@@ -334,6 +402,21 @@ export interface components {
       };
       evidence: components["schemas"]["EvidencePointer"];
     };
+    /** EventIndexStatus */
+    EventIndexStatus: {
+      /** Available */
+      available: boolean;
+      /** Event Count */
+      event_count: number;
+      /** Principal Key Count */
+      principal_key_count: number;
+      /** Resource Key Count */
+      resource_key_count: number;
+      /** Department Count */
+      department_count: number;
+      /** Input Signature */
+      input_signature?: string | null;
+    };
     /** EventList */
     EventList: {
       /** Items */
@@ -361,6 +444,26 @@ export interface components {
       /** Observed At */
       observed_at: string;
     };
+    /** FeatureTableStatus */
+    FeatureTableStatus: {
+      /** Action Row Count */
+      action_row_count: number;
+      /** History Row Count */
+      history_row_count: number;
+      /** Collaboration Row Count */
+      collaboration_row_count: number;
+      /** Static Row Count */
+      static_row_count: number;
+      /** Peer Group Row Count */
+      peer_group_row_count: number;
+    };
+    /** FeatureVocabStatus */
+    FeatureVocabStatus: {
+      /** Principal Count */
+      principal_count: number;
+      /** Resource Count */
+      resource_count: number;
+    };
     /** HTTPValidationError */
     HTTPValidationError: {
       /** Detail */
@@ -370,6 +473,17 @@ export interface components {
     Health: {
       /** Status */
       status: string;
+    };
+    /** IdentityProfilesStatus */
+    IdentityProfilesStatus: {
+      /** Available */
+      available: boolean;
+      /** Source */
+      source?: string | null;
+      /** Principal Count */
+      principal_count: number;
+      /** Team Count */
+      team_count: number;
     };
     /** IntakeAccepted */
     IntakeAccepted: {
@@ -393,6 +507,211 @@ export interface components {
       duplicate: boolean;
       /** Queue Path */
       queue_path: string;
+    };
+    /** ModelActivationGateStatus */
+    ModelActivationGateStatus: {
+      /** Eligible */
+      eligible: boolean;
+      /** Reason */
+      reason: string;
+      /** Status */
+      status?: string | null;
+      /** Training Pair Count */
+      training_pair_count: number;
+      /** Final Loss */
+      final_loss?: number | null;
+      /** Evaluation Scope */
+      evaluation_scope?: string | null;
+      /** Sampled Top1 Accuracy */
+      sampled_top1_accuracy?: number | null;
+      /** Pairwise Win Rate */
+      pairwise_win_rate?: number | null;
+      /** Mean Margin */
+      mean_margin?: number | null;
+      /** Source Gates */
+      source_gates?: {
+        [key: string]: components["schemas"]["ModelSourceActivationGateStatus"];
+      };
+      /**
+       * Evaluated Source Count
+       * @default 0
+       */
+      evaluated_source_count: number;
+      /** Failing Sources */
+      failing_sources?: string[];
+      coverage_gate?: components["schemas"]["ModelCoverageGateStatus"] | null;
+    };
+    /** ModelActivationRecord */
+    ModelActivationRecord: {
+      /** Action */
+      action: string;
+      /** Model Id */
+      model_id?: string | null;
+      /** Metadata Path */
+      metadata_path?: string | null;
+      /** Requested Mode */
+      requested_mode: string;
+      /** Activation Source */
+      activation_source?: string | null;
+      /** Activated At */
+      activated_at?: string | null;
+    };
+    /** ModelCoverageGateStatus */
+    ModelCoverageGateStatus: {
+      /** Eligible */
+      eligible: boolean;
+      /** Reason */
+      reason: string;
+      /** Covered Sources */
+      covered_sources?: string[];
+      /** Covered Identity Sources */
+      covered_identity_sources?: string[];
+      /** Covered Resource Sources */
+      covered_resource_sources?: string[];
+      /**
+       * Required Source Count
+       * @default 0
+       */
+      required_source_count: number;
+      /**
+       * Require Identity Coverage
+       * @default true
+       */
+      require_identity_coverage: boolean;
+      /**
+       * Require Resource Coverage
+       * @default true
+       */
+      require_resource_coverage: boolean;
+      /** Identity Sources */
+      identity_sources?: string[];
+      /** Resource Sources */
+      resource_sources?: string[];
+    };
+    /** ModelPromotionPolicyStatus */
+    ModelPromotionPolicyStatus: {
+      /**
+       * Required Source Count
+       * @default 0
+       */
+      required_source_count: number;
+      /**
+       * Require Identity Coverage
+       * @default true
+       */
+      require_identity_coverage: boolean;
+      /**
+       * Require Resource Coverage
+       * @default true
+       */
+      require_resource_coverage: boolean;
+      /** Identity Sources */
+      identity_sources?: string[];
+      /** Resource Sources */
+      resource_sources?: string[];
+    };
+    /** ModelRuntimeStatus */
+    ModelRuntimeStatus: {
+      /** Available */
+      available: boolean;
+      /** Requested Mode */
+      requested_mode: string;
+      /** Effective Mode */
+      effective_mode: string;
+      /** Reason */
+      reason: string;
+      /** Model Id */
+      model_id?: string | null;
+      /** Model Version */
+      model_version?: string | null;
+      /** Model Family */
+      model_family?: string | null;
+      /** Exported At */
+      exported_at?: string | null;
+      /** Metadata Path */
+      metadata_path?: string | null;
+      /** Activated At */
+      activated_at?: string | null;
+      /** Activation Source */
+      activation_source?: string | null;
+      /** Action Source Count */
+      action_source_count: number;
+      /** Principal Vocab Count */
+      principal_vocab_count: number;
+      /** Resource Vocab Count */
+      resource_vocab_count: number;
+      activation_gate: components["schemas"]["ModelActivationGateStatus"];
+      /** Recent Activation History */
+      recent_activation_history: components["schemas"]["ModelActivationRecord"][];
+      /** Installed Model Count */
+      installed_model_count: number;
+      /** Installed Model Ids */
+      installed_model_ids: string[];
+      score_policy?: components["schemas"]["ModelScorePolicyStatus"] | null;
+      promotion_policy: components["schemas"]["ModelPromotionPolicyStatus"];
+    };
+    /** ModelScorePolicyStatus */
+    ModelScorePolicyStatus: {
+      /** Detection Threshold */
+      detection_threshold: number;
+      /** High Severity Threshold */
+      high_severity_threshold: number;
+      /** Calibration Source */
+      calibration_source?: string | null;
+      /** Calibration Reason */
+      calibration_reason?: string | null;
+      /** Positive Distance P95 */
+      positive_distance_p95?: number | null;
+      /** Negative Distance P50 */
+      negative_distance_p50?: number | null;
+      /** Negative Distance P90 */
+      negative_distance_p90?: number | null;
+      /** Evaluation Pair Count */
+      evaluation_pair_count?: number | null;
+      /** Source Policies */
+      source_policies?: {
+        [key: string]: components["schemas"]["ModelSourceScorePolicyStatus"];
+      };
+    };
+    /** ModelSourceActivationGateStatus */
+    ModelSourceActivationGateStatus: {
+      /** Eligible */
+      eligible: boolean;
+      /** Reason */
+      reason: string;
+      /** Status */
+      status?: string | null;
+      /** Final Loss */
+      final_loss?: number | null;
+      /** Evaluation Scope */
+      evaluation_scope?: string | null;
+      /** Sampled Top1 Accuracy */
+      sampled_top1_accuracy?: number | null;
+      /** Pairwise Win Rate */
+      pairwise_win_rate?: number | null;
+      /** Mean Margin */
+      mean_margin?: number | null;
+      /** Pair Count */
+      pair_count?: number | null;
+    };
+    /** ModelSourceScorePolicyStatus */
+    ModelSourceScorePolicyStatus: {
+      /** Detection Threshold */
+      detection_threshold: number;
+      /** High Severity Threshold */
+      high_severity_threshold: number;
+      /** Calibration Source */
+      calibration_source?: string | null;
+      /** Calibration Reason */
+      calibration_reason?: string | null;
+      /** Positive Distance P95 */
+      positive_distance_p95?: number | null;
+      /** Negative Distance P50 */
+      negative_distance_p50?: number | null;
+      /** Negative Distance P90 */
+      negative_distance_p90?: number | null;
+      /** Evaluation Pair Count */
+      evaluation_pair_count?: number | null;
     };
     /** OpsMetadata */
     OpsMetadata: {
@@ -452,6 +771,14 @@ export interface components {
         [key: string]: unknown;
       };
     };
+    /** ProjectionStatus */
+    ProjectionStatus: {
+      /** Available */
+      available: boolean;
+      overview?: components["schemas"]["Overview"] | null;
+      /** Error */
+      error?: string | null;
+    };
     /** Resource */
     Resource: {
       /** Id */
@@ -472,6 +799,33 @@ export interface components {
       attributes: {
         [key: string]: unknown;
       };
+    };
+    /** RuntimeStatus */
+    RuntimeStatus: {
+      /** Tenant Id */
+      tenant_id: string;
+      worker_state: components["schemas"]["WorkerState"];
+      feature_tables: components["schemas"]["FeatureTableStatus"];
+      feature_vocab: components["schemas"]["FeatureVocabStatus"];
+      scoring_input: components["schemas"]["ScoringInputStatus"];
+      model_runtime: components["schemas"]["ModelRuntimeStatus"];
+      event_index: components["schemas"]["EventIndexStatus"];
+      detection_context: components["schemas"]["DetectionContextStatus"];
+      identity_profiles: components["schemas"]["IdentityProfilesStatus"];
+      projection: components["schemas"]["ProjectionStatus"];
+    };
+    /** ScoringInputStatus */
+    ScoringInputStatus: {
+      /** Ready */
+      ready: boolean;
+      /** Mode */
+      mode: string;
+      /** Reason */
+      reason: string;
+      /** Materialized Table Count */
+      materialized_table_count: number;
+      /** Materialized Tables */
+      materialized_tables: string[];
     };
     /** SourceCapabilityDetails */
     SourceCapabilityDetails: {
@@ -581,6 +935,8 @@ export interface components {
     WorkerState: {
       /** Normalization Runs */
       normalization_runs: number;
+      /** Feature Runs */
+      feature_runs: number;
       /** Detection Runs */
       detection_runs: number;
       /** Source Stats Runs */
@@ -595,6 +951,8 @@ export interface components {
       last_processed_batch_id?: string | null;
       /** Last Normalization At */
       last_normalization_at?: string | null;
+      /** Last Feature At */
+      last_feature_at?: string | null;
       /** Last Detection At */
       last_detection_at?: string | null;
       /** Last Source Stats At */
@@ -687,6 +1045,26 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkerState"];
+        };
+      };
+    };
+  };
+  runtime_status_api_runtime_status_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RuntimeStatus"];
         };
       };
     };

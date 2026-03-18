@@ -8,3 +8,4 @@ web-dist/
 .ruff_cache/
 .python-version
 .seccloud/
+rust/target/

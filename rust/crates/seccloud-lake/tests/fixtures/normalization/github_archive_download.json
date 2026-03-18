@@ -1,0 +1,73 @@
+{
+  "name": "github_archive_download",
+  "raw_event": {
+    "source": "github",
+    "source_event_id": "gh_evt_001",
+    "observed_at": "2026-03-15T16:00:00Z",
+    "received_at": "2026-03-15T16:00:30Z",
+    "actor_email": "carol@example.com",
+    "actor_name": "Carol Example",
+    "department": "engineering",
+    "role": "staff-engineer",
+    "event_type": "archive_download",
+    "resource_id": "github:repo/seccloud/platform",
+    "resource_name": "seccloud/platform",
+    "resource_kind": "repo",
+    "sensitivity": "internal",
+    "bytes_transferred_mb": 512,
+    "vendor_event_type": "repo.archive_download"
+  },
+  "expected": {
+    "kind": "normalized",
+    "event": {
+      "action": {
+        "category": "code_access",
+        "source": "github",
+        "verb": "archive_download"
+      },
+      "attributes": {
+        "bytes_transferred_mb": 512,
+        "received_at": "2026-03-15T16:00:30Z",
+        "vendor_event_type": "repo.archive_download"
+      },
+      "environment": {
+        "source_kind": "repo"
+      },
+      "event_id": "event::evk_5ea16e4799c630f6e4091325",
+      "event_key": "evk_5ea16e4799c630f6e4091325",
+      "evidence": {
+        "object_key": "raw/tenant=local/source=github/integration=default/dt=2026-03-15/hour=16/evk_5ea16e4799c630f6e4091325.json",
+        "observed_at": "2026-03-15T16:00:00Z",
+        "raw_event_id": "gh_evt_001",
+        "source": "github"
+      },
+      "integration_id": null,
+      "observed_at": "2026-03-15T16:00:00Z",
+      "principal": {
+        "attributes": {
+          "role": "staff-engineer"
+        },
+        "department": "engineering",
+        "display_name": "Carol Example",
+        "email": "carol@example.com",
+        "entity_id": "entity::enk_9d55d7f7e66b060429753a9a",
+        "entity_key": "enk_9d55d7f7e66b060429753a9a",
+        "id": "carol@example.com",
+        "kind": "human",
+        "provider": "github"
+      },
+      "resource": {
+        "attributes": {},
+        "entity_id": "entity::enk_7b24c0ea9a76a0c14017877e",
+        "entity_key": "enk_7b24c0ea9a76a0c14017877e",
+        "id": "github:repo/seccloud/platform",
+        "kind": "repo",
+        "name": "seccloud/platform",
+        "provider": "github",
+        "sensitivity": "internal"
+      },
+      "source": "github",
+      "source_event_id": "gh_evt_001"
+    }
+  }
+}

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import time
+import json
+import os
+import shutil
+import subprocess
 from collections import defaultdict
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+from seccloud.detection_context import ensure_detection_context
+from seccloud.feature_contract import feature_scoring_contract
 from seccloud.ids import new_prefixed_id
-from seccloud.pipeline import (
-    SOURCE_MAPPING,
-    build_derived_state_and_detections,
-    collect_ops_metadata,
-    ingest_raw_events,
-)
-from seccloud.stats_projector import rebuild_source_stats, record_raw_event
+from seccloud.pipeline import SOURCE_MAPPING
 from seccloud.storage import Workspace, canonical_json_bytes, sha256_digest
 
 
@@ -88,9 +88,7 @@ def build_raw_intake_batch(
 
 
 def submit_raw_intake_batch(workspace: Workspace, batch: dict[str, Any]) -> dict[str, Any]:
-    worker_state = workspace.load_worker_state()
-    worker_state["last_submitted_batch_id"] = batch["batch_id"]
-    workspace.save_worker_state(worker_state)
+    _update_worker_state(workspace, last_submitted_batch_id=batch["batch_id"])
     return {
         "batch_id": batch["batch_id"],
         "tenant_id": batch["tenant_id"],
@@ -183,18 +181,236 @@ def run_okta_fixture_collector(
     return run_collector_job(workspace, adapter=adapter, limit=limit)
 
 
-def _empty_ingest_result(workspace: Workspace) -> dict[str, Any]:
-    manifest = workspace.load_ingest_manifest()
+def _update_worker_state(workspace: Workspace, **updates: Any) -> dict[str, Any]:
+    worker_state = workspace.load_worker_state()
+    worker_state.update(updates)
+    workspace.save_worker_state(worker_state)
+    return worker_state
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _require_rust_local_runtime() -> None:
+    if shutil.which("cargo") is None:
+        raise RuntimeError("Rust local runtime requires `cargo` on PATH.")
+
+
+def _run_rust_normalization_worker(
+    workspace: Workspace,
+    max_batches: int | None = None,
+) -> dict[str, Any]:
+    extra_args = ["--tenant-id", workspace.tenant_id]
+    if max_batches is not None:
+        extra_args.extend(["--max-batches", str(max_batches)])
+    result = _run_rust_runtime_command(
+        workspace,
+        bin_name="seccloud-normalizer",
+        extra_args=extra_args,
+    )
     return {
-        "raw_events_seen": len(manifest.get("raw_event_ids", [])),
-        "normalized_events_seen": len(manifest.get("normalized_event_ids", [])),
-        "added_raw_events": 0,
-        "added_normalized_events": 0,
-        "duplicate_semantic_events": 0,
-        "late_arrival_count": 0,
-        "dead_letter_count": 0,
-        "dead_letter_reasons": {},
+        "processed_batch_count": result["processed_batch_count"],
+        "processed_batch_ids": result.get("processed_batch_ids", []),
+        "landed_record_count": result["raw_event_count"],
+        "pending_batch_count": len(workspace.list_pending_intake_batches()),
+        "ingest": {
+            "raw_events_seen": result["raw_events_seen"],
+            "normalized_events_seen": result["normalized_events_seen"],
+            "added_raw_events": result["added_raw_events"],
+            "added_normalized_events": result["normalized_event_count"],
+            "duplicate_semantic_events": result["duplicate_semantic_events"],
+            "late_arrival_count": result["late_arrival_count"],
+            "dead_letter_count": result["dead_letter_count"],
+            "dead_letter_reasons": result["dead_letter_reasons"],
+        },
     }
+
+
+def _print_service_once_summary(result: dict[str, Any]) -> None:
+    if result["status"] == "processed":
+        norm = result.get("result", {}).get("normalization", {})
+        detect = result.get("result", {}).get("detect", {})
+        landed = norm.get("landed_record_count", 0)
+        ingested = norm.get("ingest", {}).get("added_normalized_events", 0)
+        new_det = detect.get("new_detection_count", 0)
+        total_det = detect.get("total_detection_count", 0)
+        print(f"  normalized {ingested} events ({landed} landed), detections: {new_det} new ({total_det} total)")
+        return
+    if result["status"] == "projected":
+        projection = result.get("result", {}).get("projection", {})
+        print(
+            f"  projection: {projection.get('event_count', 0)} events, "
+            f"{projection.get('detection_count', 0)} detections"
+        )
+        return
+    if result["status"] == "materialized":
+        print("  source stats: refreshing...")
+
+
+def _detection_context_summary(workspace: Workspace) -> dict[str, Any]:
+    context = ensure_detection_context(workspace)
+    return {
+        "event_count": int(context.get("event_count", 0)),
+        "context_version": int(context.get("context_version", 1)),
+        "input_signature": context.get("input_signature"),
+    }
+
+
+def _run_rust_source_stats_projector(workspace: Workspace) -> dict[str, Any]:
+    return _run_rust_runtime_command(workspace, bin_name="seccloud-source-stats")
+
+
+def _run_rust_feature_builder(workspace: Workspace) -> dict[str, Any]:
+    return _run_rust_runtime_command(
+        workspace,
+        bin_name="seccloud-features",
+        extra_args=["--tenant-id", workspace.tenant_id],
+    )
+
+
+def _run_rust_detection_worker(workspace: Workspace) -> dict[str, Any]:
+    return _run_rust_runtime_command(workspace, bin_name="seccloud-detections")
+
+
+def _run_rust_detection_mode_comparison(workspace: Workspace) -> dict[str, Any]:
+    return _run_rust_runtime_command(workspace, bin_name="seccloud-detection-compare")
+
+
+def _run_rust_detection_evaluation(workspace: Workspace) -> dict[str, Any]:
+    return _run_rust_runtime_command(workspace, bin_name="seccloud-detection-eval")
+
+
+def _run_rust_detection_threshold_sweep(workspace: Workspace) -> dict[str, Any]:
+    return _run_rust_runtime_command(workspace, bin_name="seccloud-detection-threshold-sweep")
+
+
+def _resolved_projection_dsn(dsn: str | None) -> str:
+    if dsn:
+        return dsn
+    from seccloud.projection_store import default_projection_dsn
+
+    return default_projection_dsn()
+
+
+def _run_rust_runtime_command(
+    workspace: Workspace,
+    *,
+    bin_name: str,
+    extra_args: list[str] | None = None,
+) -> dict[str, Any]:
+    cmd = [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "seccloud-ingestion",
+        "--bin",
+        bin_name,
+        "--",
+        "--workspace",
+        str(workspace.root.resolve()),
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+    env = os.environ.copy()
+    env.setdefault("RUST_LOG", "info")
+    completed = subprocess.run(
+        cmd,
+        cwd=_repo_root() / "rust",
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        details: list[str] = [
+            f"Rust runtime command failed for {bin_name} with exit code {completed.returncode}.",
+            f"Command: {' '.join(cmd)}",
+        ]
+        if stderr:
+            details.append(f"stderr:\n{stderr}")
+        if stdout:
+            details.append(f"stdout:\n{stdout}")
+        raise RuntimeError("\n".join(details))
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        details = [
+            f"Rust runtime command returned invalid JSON for {bin_name}.",
+            f"Command: {' '.join(cmd)}",
+        ]
+        if stderr:
+            details.append(f"stderr:\n{stderr}")
+        if stdout:
+            details.append(f"stdout:\n{stdout}")
+        raise RuntimeError("\n".join(details)) from exc
+
+
+def _run_rust_projector_worker(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
+    return _run_rust_runtime_command(
+        workspace,
+        bin_name="seccloud-projector",
+        extra_args=[
+            "--tenant-id",
+            workspace.tenant_id,
+            "--dsn",
+            _resolved_projection_dsn(dsn),
+        ],
+    )
+
+
+def _run_rust_service_once(
+    workspace: Workspace,
+    dsn: str | None = None,
+    max_batches: int | None = None,
+) -> dict[str, Any]:
+    extra_args = [
+        "--tenant-id",
+        workspace.tenant_id,
+        "--dsn",
+        _resolved_projection_dsn(dsn),
+    ]
+    if max_batches is not None:
+        extra_args.extend(["--max-batches", str(max_batches)])
+    return _run_rust_runtime_command(
+        workspace,
+        bin_name="seccloud-service-once",
+        extra_args=extra_args,
+    )
+
+
+def _run_rust_service_loop(
+    workspace: Workspace,
+    dsn: str | None = None,
+    poll_interval_seconds: float = 1.0,
+    max_batches: int | None = None,
+    max_iterations: int | None = None,
+    exit_when_idle: bool = False,
+) -> dict[str, Any]:
+    extra_args = [
+        "--tenant-id",
+        workspace.tenant_id,
+        "--dsn",
+        _resolved_projection_dsn(dsn),
+        "--poll-interval-seconds",
+        str(poll_interval_seconds),
+    ]
+    if max_batches is not None:
+        extra_args.extend(["--max-batches", str(max_batches)])
+    if max_iterations is not None:
+        extra_args.extend(["--iterations", str(max_iterations)])
+    if exit_when_idle:
+        extra_args.append("--exit-when-idle")
+    return _run_rust_runtime_command(
+        workspace,
+        bin_name="seccloud-service-loop",
+        extra_args=extra_args,
+    )
 
 
 def run_normalization_worker(
@@ -203,66 +419,53 @@ def run_normalization_worker(
     dsn: str | None = None,
 ) -> dict[str, Any]:
     workspace.bootstrap()
-    pending_batches = workspace.list_pending_intake_batches()
-    if max_batches is not None:
-        pending_batches = pending_batches[:max_batches]
+    _require_rust_local_runtime()
+    result = _run_rust_normalization_worker(workspace, max_batches=max_batches)
+    if result["processed_batch_count"] > 0:
+        workspace.clear_source_stats_refresh_request()
+    return result
 
-    landed_record_count = 0
-    processed_batch_ids: list[str] = []
-    for batch in pending_batches:
-        raw_manifest = workspace.object_store.get_json(batch["manifest_key"]) if batch.get("manifest_key") else None
-        raw_object_descriptor = None
-        if raw_manifest is not None:
-            raw_object_descriptor = next(
-                (item for item in raw_manifest.get("objects", []) if item.get("object_key") == batch.get("object_key")),
-                None,
-            )
-        for envelope in workspace.read_raw_batch_records(batch):
-            record = envelope.get("record", {})
-            landed_record = {
-                "integration_id": envelope.get("integration_id", batch.get("integration_id")),
-                "intake_batch_id": batch["batch_id"],
-                "intake_kind": envelope.get("intake_kind", batch.get("producer", {}).get("kind")),
-                "received_at": envelope.get("received_at", batch.get("received_at")),
-                "raw_manifest_key": batch.get("manifest_key"),
-                "raw_batch_object_key": batch.get("object_key"),
-                "raw_record_ordinal": envelope.get("record_ordinal"),
-                "raw_object_sha256": raw_object_descriptor.get("sha256") if raw_object_descriptor else None,
-                "raw_object_format": raw_object_descriptor.get("object_format") if raw_object_descriptor else None,
-                **record,
-            }
-            record_source = record.get("source", batch["source"])
-            landed_record["source"] = record_source
-            _, created = workspace.write_raw_event(record_source, landed_record)
-            record_raw_event(workspace, record_source, landed_record, created=created)
-            landed_record_count += 1
-        workspace.mark_intake_batch_processed(batch["batch_id"])
-        processed_batch_ids.append(batch["batch_id"])
 
-    ingest = ingest_raw_events(workspace, dsn=dsn) if processed_batch_ids else _empty_ingest_result(workspace)
-    worker_state = workspace.load_worker_state()
-    worker_state["normalization_runs"] = worker_state.get("normalization_runs", 0) + 1
-    worker_state["last_processed_batch_id"] = processed_batch_ids[-1] if processed_batch_ids else None
-    worker_state["last_normalization_at"] = _now_timestamp()
-    workspace.save_worker_state(worker_state)
-    return {
-        "processed_batch_count": len(processed_batch_ids),
-        "processed_batch_ids": processed_batch_ids,
-        "landed_record_count": landed_record_count,
-        "pending_batch_count": len(workspace.list_pending_intake_batches()),
-        "ingest": ingest,
-    }
+def run_feature_builder(workspace: Workspace) -> dict[str, Any]:
+    workspace.bootstrap()
+    _require_rust_local_runtime()
+    result = _run_rust_feature_builder(workspace)
+    feature_state = feature_scoring_contract(workspace.load_feature_state() | result)
+    workspace.feature_state_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace.feature_state_path.write_text(
+        json.dumps(feature_state, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return result
+
+
+def run_detection_context_builder(workspace: Workspace) -> dict[str, Any]:
+    workspace.bootstrap()
+    return _detection_context_summary(workspace)
 
 
 def run_detection_worker(workspace: Workspace) -> dict[str, Any]:
     workspace.bootstrap()
-    detect = build_derived_state_and_detections(workspace)
-    ops = collect_ops_metadata(workspace)
-    worker_state = workspace.load_worker_state()
-    worker_state["detection_runs"] = worker_state.get("detection_runs", 0) + 1
-    worker_state["last_detection_at"] = _now_timestamp()
-    workspace.save_worker_state(worker_state)
-    return {"detect": detect, "ops_metadata": ops}
+    _require_rust_local_runtime()
+    return _run_rust_detection_worker(workspace)
+
+
+def run_detection_mode_comparison(workspace: Workspace) -> dict[str, Any]:
+    workspace.bootstrap()
+    _require_rust_local_runtime()
+    return _run_rust_detection_mode_comparison(workspace)
+
+
+def run_detection_mode_evaluation(workspace: Workspace) -> dict[str, Any]:
+    workspace.bootstrap()
+    _require_rust_local_runtime()
+    return _run_rust_detection_evaluation(workspace)
+
+
+def run_detection_threshold_sweep(workspace: Workspace) -> dict[str, Any]:
+    workspace.bootstrap()
+    _require_rust_local_runtime()
+    return _run_rust_detection_threshold_sweep(workspace)
 
 
 def run_local_processing_workers(
@@ -271,36 +474,38 @@ def run_local_processing_workers(
     dsn: str | None = None,
 ) -> dict[str, Any]:
     normalization = run_normalization_worker(workspace, max_batches=max_batches, dsn=dsn)
+    features = run_feature_builder(workspace)
     detection = run_detection_worker(workspace)
+    detection_context = _detection_context_summary(workspace)
     return {
         "normalization": normalization,
+        "features": features,
+        "detection_context": detection_context,
         "detect": detection["detect"],
         "ops_metadata": detection["ops_metadata"],
+        "scoring_runtime": detection.get("scoring_runtime"),
     }
 
 
 def run_projector_worker(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
-    from seccloud.projection_store import sync_workspace_projection
-
     workspace.bootstrap()
-    projection = sync_workspace_projection(workspace, dsn)
-    workspace.clear_projection_refresh_request()
-    worker_state = workspace.load_worker_state()
-    worker_state["projection_runs"] = worker_state.get("projection_runs", 0) + 1
-    worker_state["last_projection_at"] = _now_timestamp()
-    workspace.save_worker_state(worker_state)
-    return projection
+    _require_rust_local_runtime()
+    return _run_rust_projector_worker(workspace, dsn)
 
 
 def run_source_stats_projector(workspace: Workspace) -> dict[str, Any]:
     workspace.bootstrap()
-    stats = rebuild_source_stats(workspace)
-    workspace.clear_source_stats_refresh_request()
-    worker_state = workspace.load_worker_state()
-    worker_state["source_stats_runs"] = worker_state.get("source_stats_runs", 0) + 1
-    worker_state["last_source_stats_at"] = _now_timestamp()
-    workspace.save_worker_state(worker_state)
-    return stats
+    _require_rust_local_runtime()
+    return _run_rust_source_stats_projector(workspace)
+
+
+def _source_stats_summary(workspace: Workspace) -> dict[str, Any]:
+    stats = workspace.load_source_stats()
+    return {
+        "source_count": len(stats.get("sources", {})),
+        "sources": sorted(stats.get("sources", {}).keys()),
+        "window_days": {"raw": 1, "normalized": 1, "dead_letters": 7},
+    }
 
 
 def run_all_local_workers(
@@ -309,10 +514,12 @@ def run_all_local_workers(
     max_batches: int | None = None,
 ) -> dict[str, Any]:
     processing = run_local_processing_workers(workspace, max_batches=max_batches, dsn=dsn)
-    source_stats = run_source_stats_projector(workspace)
+    source_stats = _source_stats_summary(workspace)
     projection = run_projector_worker(workspace, dsn)
     return {
         "normalization": processing["normalization"],
+        "features": processing["features"],
+        "detection_context": processing["detection_context"],
         "detect": processing["detect"],
         "ops_metadata": processing["ops_metadata"],
         "source_stats": source_stats,
@@ -327,60 +534,11 @@ def run_worker_service_once(
     verbose: bool = False,
 ) -> dict[str, Any]:
     workspace.bootstrap()
-    pending_batch_count = len(workspace.list_pending_intake_batches())
-    source_stats_requested = workspace.source_stats_refresh_requested()
-    projection_requested = workspace.projection_refresh_requested()
-    worker_state = workspace.load_worker_state()
-    worker_state["service_runs"] = worker_state.get("service_runs", 0) + 1
-    worker_state["last_service_at"] = _now_timestamp()
-    workspace.save_worker_state(worker_state)
-
-    if pending_batch_count == 0 and not source_stats_requested and not projection_requested:
-        worker_state["last_service_status"] = "idle"
-        workspace.save_worker_state(worker_state)
-        return {
-            "status": "idle",
-            "pending_batch_count": 0,
-            "processed_batch_count": len(workspace.list_processed_intake_batches()),
-        }
-
-    if pending_batch_count == 0:
-        result: dict[str, Any] = {}
-        if source_stats_requested:
-            if verbose:
-                print("  source stats: refreshing...")
-            result["source_stats"] = run_source_stats_projector(workspace)
-        if projection_requested:
-            if verbose:
-                print("  projection: syncing...")
-            result["projection"] = run_projector_worker(workspace, dsn)
-            if verbose:
-                p = result["projection"]
-                print(f"  projection: {p.get('event_count', 0)} events, {p.get('detection_count', 0)} detections")
-        status = "projected" if projection_requested else "materialized"
-    else:
-        if verbose:
-            print(f"  processing {pending_batch_count} intake batches...")
-        result = run_all_local_workers(workspace, dsn=dsn, max_batches=max_batches)
-        norm = result.get("normalization", {})
-        detect = result.get("detect", {})
-        if verbose:
-            landed = norm.get("landed_record_count", 0)
-            ingested = norm.get("ingest", {}).get("added_normalized_events", 0)
-            new_det = detect.get("new_detection_count", 0)
-            total_det = detect.get("total_detection_count", 0)
-            print(f"  normalized {ingested} events ({landed} landed), detections: {new_det} new ({total_det} total)")
-        status = "processed"
-    worker_state = workspace.load_worker_state()
-    worker_state["last_service_at"] = _now_timestamp()
-    worker_state["last_service_status"] = status
-    workspace.save_worker_state(worker_state)
-    return {
-        "status": status,
-        "pending_batch_count": len(workspace.list_pending_intake_batches()),
-        "processed_batch_count": len(workspace.list_processed_intake_batches()),
-        "result": result,
-    }
+    _require_rust_local_runtime()
+    response = _run_rust_service_once(workspace, dsn=dsn, max_batches=max_batches)
+    if verbose:
+        _print_service_once_summary(response)
+    return response
 
 
 def run_worker_service_loop(
@@ -391,32 +549,15 @@ def run_worker_service_loop(
     max_iterations: int | None = None,
     exit_when_idle: bool = False,
 ) -> dict[str, Any]:
-    iterations = 0
-    processed_iterations = 0
-    idle_iterations = 0
-
-    while max_iterations is None or iterations < max_iterations:
-        result = run_worker_service_once(workspace, dsn=dsn, max_batches=max_batches, verbose=True)
-        iterations += 1
-        if result["status"] == "processed":
-            processed_iterations += 1
-        elif result["status"] != "idle":
-            pass  # projected/materialized
-        else:
-            idle_iterations += 1
-        if exit_when_idle and result["status"] == "idle":
-            break
-        if max_iterations is not None and iterations >= max_iterations:
-            break
-        time.sleep(max(poll_interval_seconds, 0))
-
-    return {
-        "iterations": iterations,
-        "processed_iterations": processed_iterations,
-        "idle_iterations": idle_iterations,
-        "pending_batch_count": len(workspace.list_pending_intake_batches()),
-        "processed_batch_count": len(workspace.list_processed_intake_batches()),
-    }
+    _require_rust_local_runtime()
+    return _run_rust_service_loop(
+        workspace,
+        dsn=dsn,
+        poll_interval_seconds=poll_interval_seconds,
+        max_batches=max_batches,
+        max_iterations=max_iterations,
+        exit_when_idle=exit_when_idle,
+    )
 
 
 def get_worker_state(workspace: Workspace) -> dict[str, Any]:

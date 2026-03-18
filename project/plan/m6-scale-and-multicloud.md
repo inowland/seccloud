@@ -1,113 +1,120 @@
-# M6: Scale & Multi-Cloud
+# M6: BYOC Deployment & Multi-Cloud
 
 ## Goal
 
-Handle enterprise-scale log volumes (100K+ events/sec per tenant), add advanced
-query capabilities (vector search, SQL-style analytics), and expand beyond AWS to
-GCP and Azure.
+Deploy the already-proven product into customer-owned environments when the demo,
+scale, resilience, and operator story are mature enough to justify the extra
+operational complexity. Multi-cloud remains an even later extension of the same
+deployment work.
 
 ## Success Criteria
 
-1. **Ingestion throughput**: 100K+ events/sec sustained per tenant.
-2. **Query performance**: entity timeline queries < 1s for 90-day windows; full-text
-   and vector search across normalized events.
-3. **Storage efficiency**: tiered storage with automated lifecycle (hot → warm → cold
-   → delete per retention policy).
-4. **Multi-cloud**: deploy data plane on GCP (GKE + GCS) and Azure (AKS + Blob).
-5. **Agent monitoring**: ingest and analyze AI agent activity logs as a first-class
-   source type.
+1. **Deployment repeatability**: provision a customer-style environment and ingest
+   data with minimal manual intervention.
+2. **Upgrade safety**: rolling deployment, rollback, and recovery work without event
+   loss or detection gaps.
+3. **Data-plane isolation**: no customer event or detection payloads leave the
+   customer environment.
+4. **Operational visibility**: control-plane-visible health metadata without pulling
+   customer data across the boundary.
+5. **Cloud portability**: the object-store, serving-store, and orchestration
+   abstractions are clean enough that AWS-first deployment does not permanently
+   trap the architecture.
 
 ## Architecture
 
-### Ingestion Scaling
-
-- Partition ingestion across multiple pods by source or hash-ring assignment
-- In-memory write-ahead buffer with S3 flush (Warpstream-style)
-- Adaptive batching: the buffer transform adjusts its `Flush` signal frequency based
-  on envelope throughput — larger Parquet files under high load, faster flushes under
-  low load. This is a localized change to one transform, not a system-wide
-  rearchitecture, thanks to the M1 control message design
-- Consider io_uring for high-throughput network I/O on Linux
-
-### Storage Tiering
+### Control Plane / Data Plane Split
 
 ```
-Hot (< 24h):    DynamoDB + in-memory indices on query pods
-Warm (1-30d):   S3 Standard, columnar indices, bloom filters, partition pruning
-Cold (30d-1y):  S3 Infrequent Access, metadata-only indices
-Archive (> 1y): S3 Glacier or customer-managed (if retention allows)
-Delete:         Automated per retention policy
+┌─────────────────────────────────────────┐
+│ Control Plane (our AWS account)         │
+│                                         │
+│  ├── Deployment orchestration           │
+│  ├── Configuration management           │
+│  ├── Health monitoring dashboard        │
+│  ├── Model artifact registry            │
+│  └── Customer management                │
+└────────────────┬────────────────────────┘
+                 │ metadata only — no customer data
+┌────────────────▼────────────────────────┐
+│ Data Plane (customer account)           │
+│                                         │
+│  ├── EKS / equivalent cluster           │
+│  ├── Object store                       │
+│  ├── Postgres / projection store        │
+│  ├── Rust worker-service + scoring      │
+│  └── API / query service                │
+└─────────────────────────────────────────┘
 ```
 
-- Columnar indices built during feature engineering: min/max per column per Parquet
-  row group, bloom filters for principal_key and resource_key
-- Turbopuffer-style approach: small index files in S3 alongside data files, loaded
-  on-demand by query workers
+### What Crosses The Boundary
 
-### Advanced Query Capabilities
+Control plane → data plane:
 
-- **Vector search**: embed queries and events in the same space, find semantically
-  similar activity patterns. Useful for "show me other activity that looks like this
-  detection."
-- **SQL-style analytics**: DataFusion-based query engine for ad-hoc analysis over
-  Parquet in S3. Enables TAM customizations and advanced investigation.
-- **Full-text search**: inverted indices over event descriptions and evidence fields,
-  stored as Parquet-adjacent index files in S3.
+- container image references
+- configuration and feature-flag updates
+- model version rollout commands
+- deployment / rollback commands
+
+Data plane → control plane:
+
+- health metrics
+- queue depth and lag summaries
+- deployment status
+- aggregate counts that contain no customer-identifying payloads
+
+Never crosses the boundary:
+
+- raw events
+- normalized events
+- feature values
+- detections and investigation payloads
+- user identities
+
+### Infrastructure As Code
+
+- Terraform modules for the full data plane stack
+- Parameterized by region, storage class, instance type, retention, and enabled
+  integrations
+- Customer-facing deployment should reuse the same object-store and projection
+  contracts proven in earlier milestones
 
 ### Multi-Cloud Abstraction
 
-Three abstraction points:
+Three abstraction points remain the same:
 
-| Capability            | AWS      | GCP                   | Azure      |
-| --------------------- | -------- | --------------------- | ---------- |
-| Object storage        | S3       | GCS                   | Azure Blob |
-| Coordination store    | DynamoDB | Bigtable or Firestore | CosmosDB   |
-| Compute orchestration | EKS      | GKE                   | AKS        |
+| Capability                   | AWS      | GCP                              | Azure               |
+| ---------------------------- | -------- | -------------------------------- | ------------------- |
+| Object storage               | S3       | GCS                              | Azure Blob          |
+| Serving / coordination store | Postgres | Cloud SQL / Bigtable / Firestore | Postgres / CosmosDB |
+| Compute orchestration        | EKS      | GKE                              | AKS                 |
 
 - Cloud-specific sinks (S3, GCS, Azure Blob) are each a `Transform` implementation
   from the M1 core crate. Swapping clouds means swapping a transform in the pipeline
-  config — pipeline logic and upstream transforms are untouched
-- Rust trait-based abstraction for object store and coordination store
+  config — pipeline logic and upstream transforms are untouched.
+- Rust trait-based abstraction for object store and serving/coordination store
 - Kubernetes manifests are cloud-agnostic (already)
 - Terraform provider modules per cloud, shared module structure
 - CI builds and tests against all three providers
 
-### Agent Monitoring
-
-AI agents as a new principal type with source-specific collectors:
-
-- **Coding agents**: tool calls, file access, API requests, git operations
-- **Customer service agents**: conversation actions, data lookups, escalations
-- **Data analysis agents**: query execution, data access, export actions
-- **Orchestration agents**: inter-service calls, permission usage, resource creation
-
-Agent activity shares the same normalized schema (principal + action + resource +
-context) but with agent-specific features: tool call sequences, permission scope
-usage, delegation chains. Adding agent sources uses the M2 declarative source
-mapping pattern: write a TOML config + test fixtures, no normalization worker
-changes required.
-
 ## Key Decisions
 
-- **DataFusion for SQL**: embedded query engine, no external dependency. Reads
-  Parquet natively. Can be extended with custom functions.
-- **No managed search service**: build search indices in S3, not Elasticsearch or
-  OpenSearch. More operational complexity to build, but zero to operate in BYOC.
-- **Agent monitoring uses the same pipeline**: not a separate product. Agents are
-  principals in the same model. This is architecturally elegant and lets the model
-  learn human-agent interaction patterns.
+- **BYOC is late on purpose**: deployment complexity should follow product clarity,
+  not lead it.
+- **AWS first, multi-cloud later**: do not pay abstraction tax until the AWS path is
+  truly solid.
+- **Control-plane metadata only**: customer payload isolation is a first-order
+  architectural rule, not a policy note.
 
 ## Dependencies
 
-- M5: stable BYOC deployment foundation
-- M3: model architecture that can incorporate new source types and principal types
+- M5: demonstrated load, resilience, and operator readiness
+- M1-M4: stable runtime, scoring, projection, and demo surfaces
 
 ## Deliverables
 
-1. Ingestion tier scaled to 100K+ eps with adaptive batching.
-2. Storage tiering with automated lifecycle management.
-3. DataFusion-based SQL query engine over S3 Parquet.
-4. Vector search for similarity-based investigation.
-5. GCP and Azure deployment modules and abstraction layer.
-6. Agent activity collectors and agent-specific features.
-7. Multi-cloud CI/CD pipeline.
+1. Terraform module suite for the data plane deployment.
+2. Control-plane service for deployment orchestration and health monitoring.
+3. Upgrade, rollback, and recovery runbooks.
+4. Cross-account IAM and networking design.
+5. AWS-first deployment path, with later GCP/Azure modules if still justified.

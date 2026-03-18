@@ -1,0 +1,23 @@
+{
+  "name": "okta_unsupported_event_type",
+  "raw_event": {
+    "source": "okta",
+    "source_event_id": "okta_evt_unsupported",
+    "observed_at": "2026-03-15T19:00:00Z",
+    "received_at": "2026-03-15T19:01:00Z",
+    "actor_email": "frank@example.com",
+    "actor_name": "Frank Example",
+    "department": "it",
+    "role": "admin",
+    "event_type": "password_reset",
+    "resource_id": "okta:app/helpdesk",
+    "resource_name": "Helpdesk",
+    "resource_kind": "app",
+    "sensitivity": "high",
+    "vendor_event_type": "user.account.reset_password"
+  },
+  "expected": {
+    "kind": "dead_letter",
+    "reason": "unsupported_event_type"
+  }
+}

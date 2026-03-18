@@ -4,6 +4,7 @@ import json
 
 from seccloud.onboarding import build_source_manifest
 from seccloud.pipeline import collect_ops_metadata
+from seccloud.runtime_status import build_runtime_status
 from seccloud.source_pack import build_source_capability_markdown, build_source_capability_matrix
 from seccloud.storage import Workspace
 from seccloud.vendor_exports import build_vendor_source_manifest
@@ -25,6 +26,7 @@ def _build_report_metrics(workspace: Workspace) -> dict[str, object]:
     dead_letters = workspace.list_dead_letters()
     if not workspace.load_ops_metadata():
         collect_ops_metadata(workspace)
+    runtime_status = build_runtime_status(workspace, dsn=None)
     capability = build_source_capability_matrix(workspace)
     sources = capability["sources"]
     seeded_sources = [source for source, details in sources.items() if details["normalized_event_count"] > 0]
@@ -37,6 +39,10 @@ def _build_report_metrics(workspace: Workspace) -> dict[str, object]:
         and details["dead_letter_count"] == 0
     ]
     detection_scenarios = sorted({item["scenario"] for item in detections})
+    feature_tables = runtime_status["feature_tables"]
+    materialized_feature_tables = sum(1 for value in feature_tables.values() if int(value) > 0)
+    projection = runtime_status["projection"]
+    projection_stream = projection.get("overview", {}).get("stream_state", {})
     return {
         "detections": detections,
         "dead_letters": dead_letters,
@@ -44,6 +50,32 @@ def _build_report_metrics(workspace: Workspace) -> dict[str, object]:
         "seeded_source_count": len(seeded_sources),
         "contract_ready_source_count": len(contract_ready_sources),
         "detection_scenarios": detection_scenarios,
+        "feature_principal_count": runtime_status["feature_vocab"]["principal_count"],
+        "feature_resource_count": runtime_status["feature_vocab"]["resource_count"],
+        "materialized_feature_tables": materialized_feature_tables,
+        "scoring_input_mode": runtime_status["scoring_input"]["mode"],
+        "scoring_input_ready": runtime_status["scoring_input"]["ready"],
+        "scoring_input_reason": runtime_status["scoring_input"]["reason"],
+        "model_runtime_available": runtime_status["model_runtime"]["available"],
+        "model_runtime_requested_mode": runtime_status["model_runtime"]["requested_mode"],
+        "model_runtime_effective_mode": runtime_status["model_runtime"]["effective_mode"],
+        "model_runtime_reason": runtime_status["model_runtime"]["reason"],
+        "model_runtime_version": runtime_status["model_runtime"]["model_version"] or "none",
+        "model_activation_gate_eligible": runtime_status["model_runtime"]["activation_gate"]["eligible"],
+        "model_activation_gate_reason": runtime_status["model_runtime"]["activation_gate"]["reason"],
+        "model_activation_history_count": len(runtime_status["model_runtime"]["recent_activation_history"]),
+        "indexed_event_count": runtime_status["event_index"]["event_count"],
+        "indexed_principal_count": runtime_status["event_index"]["principal_key_count"],
+        "indexed_resource_count": runtime_status["event_index"]["resource_key_count"],
+        "indexed_department_count": runtime_status["event_index"]["department_count"],
+        "detection_context_available": runtime_status["detection_context"]["available"],
+        "detection_context_event_count": runtime_status["detection_context"]["event_count"],
+        "identity_profile_principal_count": runtime_status["identity_profiles"]["principal_count"],
+        "identity_profile_team_count": runtime_status["identity_profiles"]["team_count"],
+        "identity_profile_source": runtime_status["identity_profiles"]["source"] or "unknown",
+        "projected_normalized_event_count": projection_stream.get("normalized_event_count", 0),
+        "projected_detection_count": projection_stream.get("detection_count", 0),
+        "projection_available": bool(projection.get("available")),
     }
 
 
@@ -96,6 +128,29 @@ company toward services work?
 `{metrics["seeded_source_count"]}/{metrics["source_count"]}`
 - Source contracts fully satisfied: \
 `{metrics["contract_ready_source_count"]}/{metrics["source_count"]}`
+- Durable feature tables materialized: `{metrics["materialized_feature_tables"]}/5`
+- Scoring input mode: `{metrics["scoring_input_mode"]}` \
+(`ready={metrics["scoring_input_ready"]}`, `{metrics["scoring_input_reason"]}`)
+- Model runtime: requested=`{metrics["model_runtime_requested_mode"]}`, \
+effective=`{metrics["model_runtime_effective_mode"]}`, \
+available=`{metrics["model_runtime_available"]}`, \
+version=`{metrics["model_runtime_version"]}` \
+(`{metrics["model_runtime_reason"]}`)
+- Model activation gate: eligible=`{metrics["model_activation_gate_eligible"]}` \
+(`{metrics["model_activation_gate_reason"]}`), history entries=`{metrics["model_activation_history_count"]}`
+- Principals in feature vocab: `{metrics["feature_principal_count"]}`
+- Resources in feature vocab: `{metrics["feature_resource_count"]}`
+- Indexed normalized events: `{metrics["indexed_event_count"]}`
+- Indexed principals/resources/departments: \
+`{metrics["indexed_principal_count"]}/{metrics["indexed_resource_count"]}/{metrics["indexed_department_count"]}`
+- Detection context materialized: `{metrics["detection_context_available"]}` \
+for `{metrics["detection_context_event_count"]}` events
+- Identity profiles loaded: `{metrics["identity_profile_principal_count"]}` principals / \
+`{metrics["identity_profile_team_count"]}` teams \
+(`{metrics["identity_profile_source"]}`)
+- Projection available: `{metrics["projection_available"]}`
+- Projected normalized events/detections: \
+`{metrics["projected_normalized_event_count"]}/{metrics["projected_detection_count"]}`
 
 ## Next Build Priorities
 - Expand beyond the current benign-drift controls into much richer drift and \
@@ -131,11 +186,11 @@ replaced with customer fixtures without redesign.
 | Class | Retention | Notes |
 | --- | --- | --- |
 | Raw events | 7 days hot | Deleted by retention enforcement. |
-| Profiles | 90-365 days | Retained derived state. |
-| Peer groups | 90-365 days | Retained derived state. |
-| Access histories | 90-365 days | Retained derived state. |
+| Profiles | 90-365 days | Durable identity and feature manifests. |
+| Peer groups | 90-365 days | Durable feature manifests. |
+| Access histories | 90-365 days | Durable feature manifests. |
 | Aggregates | 90-365 days | Retained derived state. |
-| Embeddings | 90-365 days | Simple PoC vectors now, model-ready contract later. |
+| Embeddings | Ephemeral | Rebuilt from current features when needed. |
 | Case artifacts | 90-365 days | Preserved to survive raw-data deletion. |
 | Feedback labels | 90-365 days | Retained for future prioritization. |
 """

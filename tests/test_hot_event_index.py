@@ -29,7 +29,14 @@ from seccloud.projection_store import (
     fetch_projected_events,
     sync_workspace_projection,
 )
+from seccloud.runtime_status import build_runtime_status
 from seccloud.storage import Workspace
+from seccloud.workers import (
+    run_projector_worker,
+    run_worker_service_loop,
+    run_worker_service_once,
+    submit_grouped_raw_events,
+)
 
 
 class HotEventIndexTestCase(unittest.TestCase):
@@ -132,12 +139,169 @@ class HotEventIndexTestCase(unittest.TestCase):
     def test_projection_sync_does_not_call_full_schema_reset(self) -> None:
         run_runtime(self.workspace)
 
-        with patch("seccloud.projection_store.reset_projection_schema", side_effect=AssertionError("full reset")):
+        with (
+            patch("seccloud.projection_store.reset_projection_schema", side_effect=AssertionError("full reset")),
+            patch.object(self.workspace, "list_normalized_events", side_effect=AssertionError("normalized scan")),
+        ):
             first = sync_workspace_projection(self.workspace, self.dsn)
             second = sync_workspace_projection(self.workspace, self.dsn)
 
         self.assertEqual(first["event_count"], second["event_count"])
         self.assertEqual(first["detection_count"], second["detection_count"])
+
+    def test_run_projector_worker_can_sync_with_rust_runtime(self) -> None:
+        if shutil.which("cargo") is None:
+            self.skipTest("cargo unavailable")
+
+        run_runtime(self.workspace)
+
+        with patch(
+            "seccloud.projection_store.sync_workspace_projection",
+            side_effect=AssertionError("python projector should not run"),
+        ):
+            result = run_projector_worker(self.workspace, self.dsn)
+
+        projected = fetch_projected_events(
+            tenant_id=self.workspace.tenant_id,
+            limit=100,
+            offset=0,
+            dsn=self.dsn,
+        )
+        self.assertGreater(result["event_count"], 0)
+        self.assertEqual(result["event_count"], projected["page"]["returned"])
+
+    def test_run_worker_service_once_can_process_with_rust_runtime(self) -> None:
+        if shutil.which("cargo") is None:
+            self.skipTest("cargo unavailable")
+
+        submit_grouped_raw_events(
+            self.workspace,
+            records=[
+                {
+                    "source": "okta",
+                    "source_event_id": "okta-rust-service-0001",
+                    "observed_at": "2026-02-11T10:00:00Z",
+                    "received_at": "2026-02-11T10:01:00Z",
+                    "actor_email": "alice@example.com",
+                    "actor_name": "Alice Admin",
+                    "department": "security",
+                    "role": "security-admin",
+                    "event_type": "login",
+                    "resource_id": "okta:admin-console",
+                    "resource_name": "Admin Console",
+                    "resource_kind": "app",
+                    "sensitivity": "high",
+                    "geo": "US-NY",
+                    "ip": "10.0.0.1",
+                    "privileged": True,
+                },
+            ],
+            intake_kind="push_gateway",
+            integration_id="okta-primary",
+        )
+
+        with (
+            patch(
+                "seccloud.projection_store.sync_workspace_projection",
+                side_effect=AssertionError("python projector"),
+            ),
+            patch("seccloud.workers.run_all_local_workers", side_effect=AssertionError("python service")),
+        ):
+            result = run_worker_service_once(self.workspace, self.dsn)
+
+        projected = fetch_projected_events(
+            tenant_id=self.workspace.tenant_id,
+            limit=50,
+            offset=0,
+            dsn=self.dsn,
+        )
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(projected["page"]["returned"], 1)
+
+    def test_m2_acceptance_rust_worker_materializes_runtime_and_projection(self) -> None:
+        if shutil.which("cargo") is None:
+            self.skipTest("cargo unavailable")
+
+        submit_grouped_raw_events(
+            self.workspace,
+            records=[
+                {
+                    "source": "okta",
+                    "source_event_id": "okta-m2-acceptance-0001",
+                    "observed_at": "2026-02-11T10:00:00Z",
+                    "received_at": "2026-02-11T10:01:00Z",
+                    "actor_email": "alice@example.com",
+                    "actor_name": "Alice Admin",
+                    "department": "security",
+                    "role": "security-admin",
+                    "event_type": "login",
+                    "resource_id": "okta:admin-console",
+                    "resource_name": "Admin Console",
+                    "resource_kind": "app",
+                    "sensitivity": "high",
+                    "geo": "US-NY",
+                    "ip": "10.0.0.1",
+                    "privileged": True,
+                },
+                {
+                    "source": "okta",
+                    "source_event_id": "okta-m2-acceptance-0002",
+                    "observed_at": "2026-02-11T10:05:00Z",
+                    "received_at": "2026-02-11T10:06:00Z",
+                    "actor_email": "bob@example.com",
+                    "actor_name": "Bob Builder",
+                    "department": "security",
+                    "role": "manager",
+                    "event_type": "login",
+                    "resource_id": "okta:admin-console",
+                    "resource_name": "Admin Console",
+                    "resource_kind": "app",
+                    "sensitivity": "high",
+                    "geo": "US-CA",
+                    "ip": "10.0.0.2",
+                    "privileged": True,
+                },
+            ],
+            intake_kind="push_gateway",
+            integration_id="okta-primary",
+        )
+
+        result = run_worker_service_once(self.workspace, self.dsn)
+        status = build_runtime_status(self.workspace, dsn=self.dsn, runtime_root=self.tempdir)
+        projected = fetch_projected_events(
+            tenant_id=self.workspace.tenant_id,
+            limit=50,
+            offset=0,
+            dsn=self.dsn,
+        )
+        event = get_event_detail(self.workspace, projected["items"][0]["event_id"], dsn=self.dsn)
+
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(projected["page"]["returned"], 2)
+        self.assertTrue(status["projection"]["available"])
+        self.assertTrue(status["scoring_input"]["ready"])
+        self.assertEqual(status["scoring_input"]["mode"], "feature_lake")
+        self.assertEqual(status["event_index"]["event_count"], 2)
+        self.assertEqual(status["detection_context"]["event_count"], 2)
+        self.assertGreaterEqual(status["feature_tables"]["action_row_count"], 1)
+        self.assertGreaterEqual(status["feature_tables"]["static_row_count"], 2)
+        self.assertIsNotNone(event)
+        self.assertEqual(event["event_id"], projected["items"][0]["event_id"])
+
+    def test_run_worker_service_loop_can_exit_idle_with_rust_runtime(self) -> None:
+        if shutil.which("cargo") is None:
+            self.skipTest("cargo unavailable")
+
+        result = run_worker_service_loop(
+            self.workspace,
+            dsn=self.dsn,
+            poll_interval_seconds=0,
+            max_iterations=2,
+            exit_when_idle=True,
+        )
+
+        self.assertEqual(result["iterations"], 1)
+        self.assertEqual(result["idle_iterations"], 1)
 
     def test_timeline_accepts_legacy_and_entity_ids_in_both_modes(self) -> None:
         self._seed_projection()
@@ -205,6 +369,25 @@ class HotEventIndexTestCase(unittest.TestCase):
         self.assertNotIn(
             detection["detection_id"],
             [item["detection_id"] for item in after["items"]],
+        )
+
+    def test_projection_sync_uses_detection_lake_when_json_sidecars_are_missing(self) -> None:
+        self._seed_projection()
+        original = self.workspace.list_detections()
+        shutil.rmtree(self.workspace.detections_dir)
+        self.workspace.detections_dir.mkdir(parents=True, exist_ok=True)
+
+        sync_workspace_projection(self.workspace, self.dsn)
+        projected = fetch_projected_detections(
+            tenant_id=self.workspace.tenant_id,
+            limit=50,
+            offset=0,
+            dsn=self.dsn,
+        )
+
+        self.assertEqual(
+            {item["detection_id"] for item in projected["items"]},
+            {item["detection_id"] for item in original if item.get("status", "open") == "open"},
         )
 
 

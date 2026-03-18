@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from seccloud.defaults import DEFAULT_TENANT_ID
+from seccloud.feature_contract import feature_scoring_contract
 from seccloud.ids import event_key, new_prefixed_id
 from seccloud.object_store import ObjectStore, build_object_store
 
@@ -39,6 +40,44 @@ def sha256_digest(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _write_parquet_bytes(rows: list[dict[str, Any]]) -> bytes:
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    schema = pa.schema(
+        [
+            pa.field("raw_envelope_version", pa.int32(), nullable=False),
+            pa.field("tenant_id", pa.utf8(), nullable=False),
+            pa.field("source", pa.utf8(), nullable=False),
+            pa.field("integration_id", pa.utf8(), nullable=False),
+            pa.field("intake_kind", pa.utf8(), nullable=False),
+            pa.field("batch_id", pa.utf8(), nullable=False),
+            pa.field("received_at", pa.utf8(), nullable=False),
+            pa.field("record_ordinal", pa.int32(), nullable=False),
+            pa.field("metadata_json", pa.utf8(), nullable=False),
+            pa.field("record_json", pa.utf8(), nullable=False),
+        ]
+    )
+    arrays = [
+        pa.array([int(row["raw_envelope_version"]) for row in rows], type=pa.int32()),
+        pa.array([str(row["tenant_id"]) for row in rows], type=pa.utf8()),
+        pa.array([str(row["source"]) for row in rows], type=pa.utf8()),
+        pa.array([str(row["integration_id"]) for row in rows], type=pa.utf8()),
+        pa.array([str(row["intake_kind"]) for row in rows], type=pa.utf8()),
+        pa.array([str(row["batch_id"]) for row in rows], type=pa.utf8()),
+        pa.array([str(row["received_at"]) for row in rows], type=pa.utf8()),
+        pa.array([int(row["record_ordinal"]) for row in rows], type=pa.int32()),
+        pa.array([str(row["metadata_json"]) for row in rows], type=pa.utf8()),
+        pa.array([str(row["record_json"]) for row in rows], type=pa.utf8()),
+    ]
+    table = pa.table(arrays, schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf, compression="zstd")
+    return buf.getvalue()
+
+
 def canonical_json_bytes(payload: Any) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -50,22 +89,33 @@ class IntakeIdempotencyConflictError(ValueError):
 NORMALIZED_SCHEMA_VERSION = "event.v1"
 
 
-def _parquet_compatible_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        if not value:
-            return None
-        return {key: _parquet_compatible_value(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_parquet_compatible_value(item) for item in value]
-    return value
-
-
-def normalized_event_parquet_bytes(event: dict[str, Any]) -> bytes:
+def normalized_event_parquet_bytes(
+    event: dict[str, Any],
+    *,
+    tenant_id: str,
+    integration_id: str,
+) -> bytes:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
+    row = {
+        "normalized_schema_version": NORMALIZED_SCHEMA_VERSION,
+        "tenant_id": tenant_id,
+        "source": event["source"],
+        "integration_id": integration_id,
+        "observed_at": event["observed_at"],
+        "event_id": event["event_id"],
+        "event_key": event["event_key"],
+        "source_event_id": event["source_event_id"],
+        "principal_entity_key": event["principal"]["entity_key"],
+        "resource_entity_key": event["resource"]["entity_key"],
+        "action_source": event["action"]["source"],
+        "action_verb": event["action"]["verb"],
+        "action_category": event["action"]["category"],
+        "payload_json": json.dumps(event, sort_keys=True),
+    }
     sink = pa.BufferOutputStream()
-    pq.write_table(pa.Table.from_pylist([_parquet_compatible_value(event)]), sink)
+    pq.write_table(pa.Table.from_pylist([row]), sink)
     return sink.getvalue().to_pybytes()
 
 
@@ -92,6 +142,7 @@ class Workspace:
         self.cases_dir = self.root / "cases"
         self.ops_dir = self.root / "ops"
         self.founder_dir = self.root / "founder_artifacts"
+        self.models_dir = self.root / "models"
 
     def bootstrap(self) -> None:
         for path in (
@@ -106,6 +157,7 @@ class Workspace:
             self.cases_dir,
             self.ops_dir,
             self.founder_dir,
+            self.models_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
         if not self.ingest_manifest_path.exists():
@@ -144,6 +196,7 @@ class Workspace:
                 self.worker_state_path,
                 {
                     "normalization_runs": 0,
+                    "feature_runs": 0,
                     "detection_runs": 0,
                     "source_stats_runs": 0,
                     "projection_runs": 0,
@@ -151,6 +204,7 @@ class Workspace:
                     "last_submitted_batch_id": None,
                     "last_processed_batch_id": None,
                     "last_normalization_at": None,
+                    "last_feature_at": None,
                     "last_detection_at": None,
                     "last_source_stats_at": None,
                     "last_projection_at": None,
@@ -173,6 +227,17 @@ class Workspace:
                     "sources": {},
                 },
             )
+        if not self.identity_profiles_path.exists():
+            write_json(
+                self.identity_profiles_path,
+                {
+                    "manifest_version": 1,
+                    "source": "unknown",
+                    "generated_at": None,
+                    "principals": [],
+                    "teams": [],
+                },
+            )
         if not self.collector_checkpoints_path.exists():
             write_json(
                 self.collector_checkpoints_path,
@@ -188,12 +253,14 @@ class Workspace:
             self.raw_dir,
             self.dead_letters_dir,
             self.normalized_dir,
+            self.root / "lake",
             self.manifests_dir,
             self.derived_dir,
             self.detections_dir,
             self.cases_dir,
             self.ops_dir,
             self.founder_dir,
+            self.models_dir,
         ):
             if path.exists():
                 shutil.rmtree(path)
@@ -226,12 +293,40 @@ class Workspace:
         return self.manifests_dir / "identity_manifest.json"
 
     @property
+    def identity_profiles_path(self) -> Path:
+        return self.manifests_dir / "identity_profiles.json"
+
+    @property
     def source_stats_path(self) -> Path:
         return self.manifests_dir / "source_stats.json"
 
     @property
     def collector_checkpoints_path(self) -> Path:
         return self.manifests_dir / "collector_checkpoints.json"
+
+    @property
+    def feature_state_path(self) -> Path:
+        return self.manifests_dir / "feature_state.json"
+
+    @property
+    def feature_vocab_path(self) -> Path:
+        return self.manifests_dir / "feature_vocab.json"
+
+    @property
+    def model_artifact_manifest_path(self) -> Path:
+        return self.manifests_dir / "model_artifact.json"
+
+    @property
+    def model_promotion_policy_path(self) -> Path:
+        return self.manifests_dir / "model_promotion_policy.json"
+
+    @property
+    def event_index_path(self) -> Path:
+        return self.manifests_dir / "event_index.json"
+
+    @property
+    def detection_context_path(self) -> Path:
+        return self.manifests_dir / "detection_context.json"
 
     @property
     def derived_state_path(self) -> Path:
@@ -252,6 +347,102 @@ class Workspace:
 
     def save_ingest_manifest(self, payload: dict[str, list[str]]) -> None:
         write_json(self.ingest_manifest_path, payload)
+
+    def load_feature_state(self) -> dict[str, Any]:
+        return feature_scoring_contract(
+            read_json(
+                self.feature_state_path,
+                {
+                    "input_signature": "",
+                    "normalized_event_count": 0,
+                    "action_feature_row_count": 0,
+                    "history_feature_row_count": 0,
+                    "collaboration_feature_row_count": 0,
+                    "static_feature_row_count": 0,
+                    "peer_group_feature_row_count": 0,
+                    "action_manifest_key": None,
+                    "history_manifest_key": None,
+                    "collaboration_manifest_key": None,
+                    "static_manifest_key": None,
+                    "peer_group_manifest_key": None,
+                },
+            )
+        )
+
+    def load_feature_vocab(self) -> dict[str, Any]:
+        return read_json(
+            self.feature_vocab_path,
+            {
+                "principal_entity_keys": [],
+                "resource_entity_keys": [],
+            },
+        )
+
+    def load_model_artifact_manifest(self) -> dict[str, Any]:
+        return read_json(
+            self.model_artifact_manifest_path,
+            {
+                "manifest_version": 2,
+                "requested_mode": "heuristic",
+                "active_model_id": None,
+                "active_metadata_path": None,
+                "activated_at": None,
+                "activation_source": None,
+                "activation_history": [],
+            },
+        )
+
+    def save_model_artifact_manifest(self, payload: dict[str, Any]) -> None:
+        write_json(self.model_artifact_manifest_path, payload)
+
+    def load_model_promotion_policy(self) -> dict[str, Any]:
+        return read_json(
+            self.model_promotion_policy_path,
+            {
+                "manifest_version": 1,
+                "required_source_count": 2,
+                "require_identity_coverage": True,
+                "require_resource_coverage": True,
+                "identity_sources": ["okta"],
+                "resource_sources": ["github", "gworkspace", "snowflake"],
+            },
+        )
+
+    def save_model_promotion_policy(self, payload: dict[str, Any]) -> None:
+        write_json(self.model_promotion_policy_path, payload)
+
+    def load_event_index(self) -> dict[str, Any]:
+        return read_json(
+            self.event_index_path,
+            {
+                "index_version": 1,
+                "input_signature": "",
+                "event_count": 0,
+                "events_by_id": {},
+                "principal_event_ids": {},
+                "resource_event_ids": {},
+                "department_event_ids": {},
+            },
+        )
+
+    def load_detection_context(self) -> dict[str, Any]:
+        return read_json(
+            self.detection_context_path,
+            {
+                "context_version": 1,
+                "input_signature": "",
+                "event_count": 0,
+                "ordered_event_ids": [],
+                "contexts_by_event_id": {},
+                "aggregates": {
+                    "events_by_source": {},
+                    "total_events": 0,
+                },
+            },
+        )
+
+    def save_detection_context(self, payload: dict[str, Any]) -> None:
+        write_json(self.detection_context_path, payload)
 
     def load_intake_manifest(self) -> dict[str, Any]:
         return read_json(
@@ -334,6 +525,7 @@ class Workspace:
     def load_worker_state(self) -> dict[str, Any]:
         defaults = {
             "normalization_runs": 0,
+            "feature_runs": 0,
             "detection_runs": 0,
             "source_stats_runs": 0,
             "projection_runs": 0,
@@ -341,6 +533,7 @@ class Workspace:
             "last_submitted_batch_id": None,
             "last_processed_batch_id": None,
             "last_normalization_at": None,
+            "last_feature_at": None,
             "last_detection_at": None,
             "last_source_stats_at": None,
             "last_projection_at": None,
@@ -381,6 +574,24 @@ class Workspace:
 
     def save_identity_manifest(self, payload: dict[str, dict[str, str]]) -> None:
         write_json(self.identity_manifest_path, payload)
+
+    def load_identity_profiles(self) -> dict[str, Any]:
+        defaults = {
+            "manifest_version": 1,
+            "source": "unknown",
+            "generated_at": None,
+            "principals": [],
+            "teams": [],
+        }
+        payload = read_json(self.identity_profiles_path)
+        if isinstance(payload, dict):
+            merged = {**defaults, **payload}
+            if merged["principals"] or merged["teams"]:
+                return merged
+        return defaults
+
+    def save_identity_profiles(self, payload: dict[str, Any]) -> None:
+        write_json(self.identity_profiles_path, payload)
 
     def load_source_stats(self) -> dict[str, Any]:
         return read_json(
@@ -545,7 +756,7 @@ class Workspace:
         return (
             f"lake/raw/layout=v1/{self._tenant_partition()}/source={source}/"
             f"{self._integration_partition(integration_id)}/dt={received:%Y-%m-%d}/hour={received:%H}/"
-            f"batch={batch_id}/part-00000.jsonl.gz"
+            f"batch={batch_id}/part-00000.parquet"
         )
 
     def _raw_manifest_key(self, *, source: str, integration_id: str, batch_id: str, received_at: str) -> str:
@@ -639,14 +850,28 @@ class Workspace:
             }
             for ordinal, record in enumerate(records)
         ]
-        jsonl_bytes = b"".join(canonical_json_bytes(item) + b"\n" for item in raw_envelopes)
-        compressed_bytes = gzip.compress(jsonl_bytes)
-        object_sha256 = sha256_digest(compressed_bytes)
+        parquet_rows = [
+            {
+                "raw_envelope_version": envelope["raw_envelope_version"],
+                "tenant_id": envelope["tenant_id"],
+                "source": envelope["source"],
+                "integration_id": envelope["integration_id"],
+                "intake_kind": envelope["intake_kind"],
+                "batch_id": envelope["batch_id"],
+                "received_at": envelope["received_at"],
+                "record_ordinal": envelope["record_ordinal"],
+                "metadata_json": json.dumps(envelope["metadata"], sort_keys=True, separators=(",", ":")),
+                "record_json": json.dumps(envelope["record"], sort_keys=True, separators=(",", ":")),
+            }
+            for envelope in raw_envelopes
+        ]
+        parquet_bytes = _write_parquet_bytes(parquet_rows)
+        object_sha256 = sha256_digest(parquet_bytes)
         object_descriptor = {
             "object_key": object_key,
-            "object_format": "jsonl.gz",
+            "object_format": "parquet",
             "sha256": object_sha256,
-            "size_bytes": len(compressed_bytes),
+            "size_bytes": len(parquet_bytes),
             "record_count": len(records),
             "first_record_ordinal": 0,
             "last_record_ordinal": max(len(records) - 1, 0),
@@ -687,7 +912,7 @@ class Workspace:
             },
             "objects": [object_descriptor],
         }
-        self.object_store.put_bytes(object_key, compressed_bytes, content_type="application/gzip")
+        self.object_store.put_bytes(object_key, parquet_bytes, content_type="application/octet-stream")
         self.object_store.put_json(manifest_key, manifest_payload)
         queue_entry = {
             "batch_id": batch_id,
@@ -720,14 +945,48 @@ class Workspace:
         return accepted
 
     def read_raw_batch_records(self, batch: dict[str, Any]) -> list[dict[str, Any]]:
-        payload = self.object_store.get_bytes(batch["object_key"])
+        object_key = batch["object_key"]
+        payload = self.object_store.get_bytes(object_key)
         if payload is None:
-            raise FileNotFoundError(f"Raw batch object not found: {batch['object_key']}")
+            raise FileNotFoundError(f"Raw batch object not found: {object_key}")
+
+        if object_key.endswith(".parquet"):
+            return self._read_parquet_raw_records(payload)
+
+        # Legacy path: gzipped JSONL
         records: list[dict[str, Any]] = []
         for line in gzip.decompress(payload).decode("utf-8").splitlines():
             if not line:
                 continue
             records.append(json.loads(line))
+        return records
+
+    @staticmethod
+    def _read_parquet_raw_records(payload: bytes) -> list[dict[str, Any]]:
+        import io
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(payload))
+        records: list[dict[str, Any]] = []
+        for i in range(table.num_rows):
+            row: dict[str, Any] = {}
+            for col_name in table.column_names:
+                value = table.column(col_name)[i].as_py()
+                # Deserialize JSON string columns back to dicts
+                if col_name in ("record_json", "metadata_json") and isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except json.JSONDecodeError:
+                        pass
+                # Map Parquet column names to legacy envelope field names
+                if col_name == "record_json":
+                    row["record"] = value
+                elif col_name == "metadata_json":
+                    row["metadata"] = value
+                else:
+                    row[col_name] = value
+            records.append(row)
         return records
 
     def _raw_object_key(self, source: str, raw_event: dict[str, Any], raw_event_key: str) -> str:
@@ -748,14 +1007,6 @@ class Workspace:
             f"dead_letters/{self._tenant_partition()}/source={source}/"
             f"{self._integration_partition(raw_event.get('integration_id'))}/dt={received_at:%Y-%m-%d}/"
             f"hour={received_at:%H}/{dead_letter_id}.json"
-        )
-
-    def _normalized_object_key(self, event: dict[str, Any]) -> str:
-        observed_at = parse_timestamp(event["observed_at"])
-        return (
-            f"normalized/{self._tenant_partition()}/source={event['source']}/"
-            f"{self._integration_partition(event.get('integration_id'))}/dt={observed_at:%Y-%m-%d}/"
-            f"hour={observed_at:%H}/{event['event_id']}.json"
         )
 
     def _normalized_batch_id(self, event: dict[str, Any]) -> str:
@@ -828,10 +1079,10 @@ class Workspace:
         return events
 
     def write_normalized_event(self, event: dict[str, Any]) -> tuple[str, bool]:
-        object_key = self._normalized_object_key(event)
-        if self.object_store.get_json(object_key) is not None:
+        object_key = self._normalized_lake_object_key(event)
+        manifest_key = self._normalized_lake_manifest_key(event)
+        if self.object_store.get_json(manifest_key) is not None:
             return object_key, False
-        self.object_store.put_json(object_key, event)
         self.ensure_normalized_lake_artifacts(event)
         return object_key, True
 
@@ -842,12 +1093,16 @@ class Workspace:
         if existing_manifest is not None:
             return existing_manifest
 
-        payload_bytes = normalized_event_parquet_bytes(event)
+        integration_id = self._partition_value(event.get("integration_id"))
+        payload_bytes = normalized_event_parquet_bytes(
+            event,
+            tenant_id=self.tenant_id,
+            integration_id=integration_id,
+        )
         object_sha256 = sha256_digest(payload_bytes)
         self.object_store.put_bytes(object_key, payload_bytes, content_type="application/vnd.apache.parquet")
 
         batch_id = self._normalized_batch_id(event)
-        integration_id = self._partition_value(event.get("integration_id"))
         manifest_payload = {
             "manifest_version": 1,
             "manifest_type": "normalized",
@@ -905,7 +1160,134 @@ class Workspace:
         events: list[dict[str, Any]] = []
         for _, payload in self.object_store.list_json("normalized"):
             events.append(payload)
+        if not events:
+            events.extend(self._list_normalized_events_from_lake())
         events.sort(key=lambda item: item["observed_at"])
+        return events
+
+    def _list_normalized_events_from_lake(self) -> list[dict[str, Any]]:
+        import io
+
+        import pyarrow.parquet as pq
+
+        events: list[dict[str, Any]] = []
+        for _, manifest in self.object_store.list_json("lake/manifests/layout=v1/type=normalized"):
+            if not isinstance(manifest, dict):
+                continue
+            for object_descriptor in manifest.get("objects", []):
+                if not isinstance(object_descriptor, dict):
+                    continue
+                object_key = object_descriptor.get("object_key")
+                if not isinstance(object_key, str):
+                    continue
+                payload = self.object_store.get_bytes(object_key)
+                if payload is None:
+                    continue
+                table = pq.read_table(io.BytesIO(payload))
+                for row in table.to_pylist():
+                    if isinstance(row, dict):
+                        payload_json = row.get("payload_json")
+                        if isinstance(payload_json, str):
+                            try:
+                                events.append(json.loads(payload_json))
+                                continue
+                            except json.JSONDecodeError:
+                                pass
+                        events.append(row)
+        deduped: dict[str, dict[str, Any]] = {}
+        for event in events:
+            event_id = event.get("event_id")
+            if isinstance(event_id, str):
+                deduped[event_id] = event
+        return list(deduped.values())
+
+    def _event_index_input_signature(self) -> str:
+        manifest = self.load_ingest_manifest()
+        payload = {
+            "normalized_event_ids": sorted(manifest.get("normalized_event_ids", [])),
+            "normalized_event_keys": sorted(manifest.get("normalized_event_keys", [])),
+        }
+        return sha256_digest(canonical_json_bytes(payload))
+
+    def rebuild_event_index(self) -> dict[str, Any]:
+        events = sorted(
+            self.list_normalized_events(),
+            key=lambda item: (item.get("observed_at", ""), item.get("event_id", "")),
+            reverse=True,
+        )
+        events_by_id: dict[str, dict[str, Any]] = {}
+        principal_event_ids: dict[str, list[str]] = {}
+        resource_event_ids: dict[str, list[str]] = {}
+        department_event_ids: dict[str, list[str]] = {}
+
+        for event in events:
+            event_id = event.get("event_id")
+            if not isinstance(event_id, str) or not event_id:
+                continue
+            events_by_id[event_id] = event
+            principal = event.get("principal", {})
+            resource = event.get("resource", {})
+            department = principal.get("department")
+            for reference in (principal.get("id"), principal.get("entity_id")):
+                if isinstance(reference, str) and reference:
+                    principal_event_ids.setdefault(reference, []).append(event_id)
+            for reference in (resource.get("id"), resource.get("entity_id")):
+                if isinstance(reference, str) and reference:
+                    resource_event_ids.setdefault(reference, []).append(event_id)
+            if isinstance(department, str) and department:
+                department_event_ids.setdefault(department, []).append(event_id)
+
+        payload = {
+            "index_version": 1,
+            "input_signature": self._event_index_input_signature(),
+            "event_count": len(events_by_id),
+            "events_by_id": events_by_id,
+            "principal_event_ids": principal_event_ids,
+            "resource_event_ids": resource_event_ids,
+            "department_event_ids": department_event_ids,
+        }
+        write_json(self.event_index_path, payload)
+        return payload
+
+    def ensure_event_index(self) -> dict[str, Any]:
+        current = self.load_event_index()
+        if current.get("input_signature") == self._event_index_input_signature():
+            return current
+        return self.rebuild_event_index()
+
+    def get_indexed_event(self, event_id: str) -> dict[str, Any] | None:
+        return self.ensure_event_index().get("events_by_id", {}).get(event_id)
+
+    def query_indexed_events(
+        self,
+        *,
+        principal_reference: str | None = None,
+        resource_reference: str | None = None,
+        department: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        index = self.ensure_event_index()
+        candidate_ids: set[str] | None = None
+        selectors = [
+            index.get("principal_event_ids", {}).get(principal_reference) if principal_reference else None,
+            index.get("resource_event_ids", {}).get(resource_reference) if resource_reference else None,
+            index.get("department_event_ids", {}).get(department) if department else None,
+        ]
+        for selector in selectors:
+            if selector is None:
+                continue
+            selector_ids = {item for item in selector if isinstance(item, str)}
+            candidate_ids = selector_ids if candidate_ids is None else candidate_ids & selector_ids
+        if candidate_ids is None:
+            candidate_ids = {event_id for event_id in index.get("events_by_id", {}) if isinstance(event_id, str)}
+        events = [
+            event
+            for event_id in candidate_ids
+            if isinstance((event := index.get("events_by_id", {}).get(event_id)), dict)
+        ]
+        events.sort(key=lambda item: (item.get("observed_at", ""), item.get("event_id", "")), reverse=True)
+        if limit is not None:
+            return events[:limit]
         return events
 
     def save_derived_state(self, payload: dict[str, Any]) -> None:
@@ -917,15 +1299,53 @@ class Workspace:
     def save_detection(self, detection: dict[str, Any]) -> None:
         write_json(self.detections_dir / f"{detection['detection_id']}.json", detection)
 
+    def _list_detection_lake_payloads(self) -> list[dict[str, Any]]:
+        import pyarrow.parquet as pq
+
+        detections_by_id: dict[str, dict[str, Any]] = {}
+        detection_manifest_root = self.root / "lake" / "manifests" / "layout=v1" / "type=detection"
+        if not detection_manifest_root.exists():
+            return []
+        for manifest_path in sorted(detection_manifest_root.rglob("*.json")):
+            manifest = read_json(manifest_path, {})
+            for obj in manifest.get("objects", []):
+                object_key = obj.get("object_key")
+                if not isinstance(object_key, str) or not object_key:
+                    continue
+                object_path = self.root / object_key
+                if not object_path.exists():
+                    continue
+                table = pq.read_table(object_path, columns=["payload_json"])
+                for payload_json in table.column("payload_json").to_pylist():
+                    if not isinstance(payload_json, str) or not payload_json:
+                        continue
+                    payload = json.loads(payload_json)
+                    detection_id = payload.get("detection_id")
+                    if isinstance(detection_id, str) and detection_id:
+                        detections_by_id[detection_id] = payload
+        return [detections_by_id[key] for key in sorted(detections_by_id)]
+
     def list_detections(self) -> list[dict[str, Any]]:
-        detections: list[dict[str, Any]] = []
+        detections_by_id: dict[str, dict[str, Any]] = {
+            detection["detection_id"]: detection
+            for detection in self._list_detection_lake_payloads()
+            if isinstance(detection.get("detection_id"), str)
+        }
         for path in sorted(self.detections_dir.glob("*.json")):
-            detections.append(read_json(path))
-        detections.sort(key=lambda item: item["detection_id"])
-        return detections
+            payload = read_json(path)
+            detection_id = payload.get("detection_id") if isinstance(payload, dict) else None
+            if isinstance(detection_id, str) and detection_id:
+                detections_by_id[detection_id] = payload
+        return [detections_by_id[key] for key in sorted(detections_by_id)]
 
     def get_detection(self, detection_id: str) -> dict[str, Any]:
-        return read_json(self.detections_dir / f"{detection_id}.json")
+        json_path = self.detections_dir / f"{detection_id}.json"
+        if json_path.exists():
+            return read_json(json_path)
+        for detection in self._list_detection_lake_payloads():
+            if detection.get("detection_id") == detection_id:
+                return detection
+        return {}
 
     def save_case(self, case_payload: dict[str, Any]) -> None:
         write_json(self.cases_dir / f"{case_payload['case_id']}.json", case_payload)

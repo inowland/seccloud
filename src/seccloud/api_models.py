@@ -86,6 +86,17 @@ class Event(ApiSchema):
     evidence: EvidencePointer
 
 
+class DetectionModelRationale(ApiSchema):
+    scoring_mode: str
+    policy_scope: str
+    detection_threshold: float
+    high_severity_threshold: float
+    model_score: float
+    score_margin: float
+    calibration_source: str | None = None
+    calibration_reason: str | None = None
+
+
 class Detection(ApiSchema):
     detection_id: str
     scenario: str
@@ -99,6 +110,7 @@ class Detection(ApiSchema):
     related_entity_ids: list[str]
     evidence: list[EvidencePointer]
     model_version: str
+    model_rationale: DetectionModelRationale | None = None
     status: str
 
 
@@ -114,10 +126,20 @@ class DetectionPeerComparison(ApiSchema):
     principal_id: str
     peer_group: str
     resource_id: str
+    principal_role: str
+    principal_location: str
+    principal_privilege_level: str
     principal_total_events: int
+    principal_prior_event_count: int
+    principal_prior_action_count: int
     principal_prior_resource_access_count: int
     peer_group_resource_access_count: int
     peer_group_principal_count: int
+    peer_group_resource_principal_count: int
+    department_peer_count: int
+    manager_peer_count: int
+    group_peer_count: int
+    geo_seen_before: bool
     detection_reasons: list[str]
 
 
@@ -213,6 +235,7 @@ class StreamAdvance(ApiSchema):
 
 class WorkerState(ApiSchema):
     normalization_runs: int
+    feature_runs: int
     detection_runs: int
     source_stats_runs: int
     projection_runs: int
@@ -220,6 +243,7 @@ class WorkerState(ApiSchema):
     last_submitted_batch_id: str | None = None
     last_processed_batch_id: str | None = None
     last_normalization_at: str | None = None
+    last_feature_at: str | None = None
     last_detection_at: str | None = None
     last_source_stats_at: str | None = None
     last_projection_at: str | None = None
@@ -227,3 +251,170 @@ class WorkerState(ApiSchema):
     last_service_status: str | None = None
     pending_batch_count: int
     processed_batch_count: int
+
+
+class FeatureTableStatus(ApiSchema):
+    action_row_count: int
+    history_row_count: int
+    collaboration_row_count: int
+    static_row_count: int
+    peer_group_row_count: int
+
+
+class FeatureVocabStatus(ApiSchema):
+    principal_count: int
+    resource_count: int
+
+
+class ScoringInputStatus(ApiSchema):
+    ready: bool
+    mode: str
+    reason: str
+    materialized_table_count: int
+    materialized_tables: list[str]
+
+
+class ModelSourceActivationGateStatus(ApiSchema):
+    eligible: bool
+    reason: str
+    status: str | None = None
+    final_loss: float | None = None
+    evaluation_scope: str | None = None
+    sampled_top1_accuracy: float | None = None
+    pairwise_win_rate: float | None = None
+    mean_margin: float | None = None
+    pair_count: int | None = None
+
+
+class ModelCoverageGateStatus(ApiSchema):
+    eligible: bool
+    reason: str
+    covered_sources: list[str] = Field(default_factory=list)
+    covered_identity_sources: list[str] = Field(default_factory=list)
+    covered_resource_sources: list[str] = Field(default_factory=list)
+    required_source_count: int = 0
+    require_identity_coverage: bool = True
+    require_resource_coverage: bool = True
+    identity_sources: list[str] = Field(default_factory=list)
+    resource_sources: list[str] = Field(default_factory=list)
+
+
+class ModelPromotionPolicyStatus(ApiSchema):
+    required_source_count: int = 0
+    require_identity_coverage: bool = True
+    require_resource_coverage: bool = True
+    identity_sources: list[str] = Field(default_factory=list)
+    resource_sources: list[str] = Field(default_factory=list)
+
+
+class ModelActivationGateStatus(ApiSchema):
+    eligible: bool
+    reason: str
+    status: str | None = None
+    training_pair_count: int
+    final_loss: float | None = None
+    evaluation_scope: str | None = None
+    sampled_top1_accuracy: float | None = None
+    pairwise_win_rate: float | None = None
+    mean_margin: float | None = None
+    source_gates: dict[str, ModelSourceActivationGateStatus] = Field(default_factory=dict)
+    evaluated_source_count: int = 0
+    failing_sources: list[str] = Field(default_factory=list)
+    coverage_gate: ModelCoverageGateStatus | None = None
+
+
+class ModelSourceScorePolicyStatus(ApiSchema):
+    detection_threshold: float
+    high_severity_threshold: float
+    calibration_source: str | None = None
+    calibration_reason: str | None = None
+    positive_distance_p95: float | None = None
+    negative_distance_p50: float | None = None
+    negative_distance_p90: float | None = None
+    evaluation_pair_count: int | None = None
+
+
+class ModelScorePolicyStatus(ApiSchema):
+    detection_threshold: float
+    high_severity_threshold: float
+    calibration_source: str | None = None
+    calibration_reason: str | None = None
+    positive_distance_p95: float | None = None
+    negative_distance_p50: float | None = None
+    negative_distance_p90: float | None = None
+    evaluation_pair_count: int | None = None
+    source_policies: dict[str, ModelSourceScorePolicyStatus] = Field(default_factory=dict)
+
+
+class ModelActivationRecord(ApiSchema):
+    action: str
+    model_id: str | None = None
+    metadata_path: str | None = None
+    requested_mode: str
+    activation_source: str | None = None
+    activated_at: str | None = None
+
+
+class ModelRuntimeStatus(ApiSchema):
+    available: bool
+    requested_mode: str
+    effective_mode: str
+    reason: str
+    model_id: str | None = None
+    model_version: str | None = None
+    model_family: str | None = None
+    exported_at: str | None = None
+    metadata_path: str | None = None
+    activated_at: str | None = None
+    activation_source: str | None = None
+    action_source_count: int
+    principal_vocab_count: int
+    resource_vocab_count: int
+    activation_gate: ModelActivationGateStatus
+    recent_activation_history: list[ModelActivationRecord]
+    installed_model_count: int
+    installed_model_ids: list[str]
+    score_policy: ModelScorePolicyStatus | None = None
+    promotion_policy: ModelPromotionPolicyStatus
+
+
+class EventIndexStatus(ApiSchema):
+    available: bool
+    event_count: int
+    principal_key_count: int
+    resource_key_count: int
+    department_count: int
+    input_signature: str | None = None
+
+
+class DetectionContextStatus(ApiSchema):
+    available: bool
+    event_count: int
+    input_signature: str | None = None
+    context_version: int
+
+
+class IdentityProfilesStatus(ApiSchema):
+    available: bool
+    source: str | None = None
+    principal_count: int
+    team_count: int
+
+
+class ProjectionStatus(ApiSchema):
+    available: bool
+    overview: Overview | None = None
+    error: str | None = None
+
+
+class RuntimeStatus(ApiSchema):
+    tenant_id: str
+    worker_state: WorkerState
+    feature_tables: FeatureTableStatus
+    feature_vocab: FeatureVocabStatus
+    scoring_input: ScoringInputStatus
+    model_runtime: ModelRuntimeStatus
+    event_index: EventIndexStatus
+    detection_context: DetectionContextStatus
+    identity_profiles: IdentityProfilesStatus
+    projection: ProjectionStatus

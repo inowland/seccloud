@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import tempfile
@@ -17,7 +18,9 @@ from seccloud.contrastive_model import (
     FacadeModel,
     ModelConfig,
 )
+from seccloud.model_artifact import write_model_artifact_bundle
 from seccloud.onnx_export import (
+    ExportedModel,
     ONNXActionTower,
     ONNXContextTower,
     benchmark_latency,
@@ -77,6 +80,66 @@ class TestExportModel(unittest.TestCase):
         self.assertEqual(exported.max_windows, 16)
         self.assertEqual(exported.max_res_per_window, 8)
         self.assertEqual(exported.max_peers, 24)
+
+    def test_export_artifact_bundle_writes_metadata(self):
+        for name in ("action_tower_gworkspace.onnx", "action_tower_github.onnx", "context_tower.onnx"):
+            (self.tmpdir / name).write_bytes(b"onnx")
+        exported = ExportedModel(
+            action_tower_paths={
+                "gworkspace": self.tmpdir / "action_tower_gworkspace.onnx",
+                "github": self.tmpdir / "action_tower_github.onnx",
+            },
+            context_tower_path=self.tmpdir / "context_tower.onnx",
+            config=self.cfg,
+            max_tokens=64,
+            max_windows=64,
+            max_res_per_window=16,
+            max_peers=64,
+        )
+        metadata = write_model_artifact_bundle(
+            exported,
+            self.tmpdir,
+            tenant_id="tenant-1",
+            model_id="contrastive-demo-v1",
+            principal_entity_keys=["principal-1", "principal-2"],
+            resource_entity_keys=["resource-1"],
+            categorical_vocabs={"role": {"analyst": 0}, "location": {"US-CA": 0}},
+            score_policy={
+                "detection_threshold": 0.4,
+                "high_severity_threshold": 0.6,
+                "calibration_source": "heldout",
+                "calibration_reason": "unit_test_policy",
+                "source_policies": {
+                    "github": {
+                        "detection_threshold": 0.35,
+                        "high_severity_threshold": 0.55,
+                        "calibration_source": "heldout:github",
+                        "calibration_reason": "unit_test_source_policy",
+                        "evaluation_pair_count": 4,
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(metadata["model_id"], "contrastive-demo-v1")
+        self.assertTrue((self.tmpdir / "metadata.json").exists())
+        self.assertTrue((self.tmpdir / "eval-report.json").exists())
+        self.assertTrue((self.tmpdir / "principal-vocab.json").exists())
+        self.assertTrue((self.tmpdir / "resource-vocab.json").exists())
+        self.assertTrue((self.tmpdir / "categorical-vocabs.json").exists())
+        persisted = json.loads((self.tmpdir / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(persisted["scoring_mode"], "onnx")
+        self.assertEqual(set(persisted["action_towers"].keys()), {"gworkspace", "github"})
+        self.assertEqual(
+            persisted["input_vocabs"]["principal_entity_keys_path"],
+            "principal-vocab.json",
+        )
+        self.assertEqual(persisted["input_vocabs"]["principal_vocab_count"], 2)
+        self.assertEqual(persisted["score_policy"]["detection_threshold"], 0.4)
+        self.assertEqual(
+            persisted["score_policy"]["source_policies"]["github"]["detection_threshold"],
+            0.35,
+        )
 
 
 class TestONNXActionTower(unittest.TestCase):

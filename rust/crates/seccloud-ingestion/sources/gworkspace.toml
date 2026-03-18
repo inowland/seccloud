@@ -1,0 +1,10 @@
+provider = "google-workspace"
+kind = "document"
+
+[action_map.view]
+verb = "read"
+category = "access"
+
+[action_map.share_external]
+verb = "share_external"
+category = "sharing"

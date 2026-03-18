@@ -11,6 +11,7 @@ type JsonResponse<Path extends keyof paths, Method extends keyof paths[Path]> =
 type BadgeTone = "critical" | "attention" | "neutral" | "positive";
 type EventDetail = JsonResponse<"/api/events/{event_id}", "get">;
 type DetectionDetail = JsonResponse<"/api/detections/{detection_id}", "get">;
+type RuntimeStatus = JsonResponse<"/api/runtime-status", "get">;
 type SourceCapabilityDetails = components["schemas"]["SourceCapabilityDetails"];
 
 interface ActionCard {
@@ -56,6 +57,7 @@ interface IntegrationDetailContentProps {
     label: string;
     note: string;
   };
+  runtimeStatus: RuntimeStatus | null;
 }
 
 export function DetectionDetailContent({
@@ -152,6 +154,39 @@ export function DetectionDetailContent({
           </ul>
         </DetailSectionCard>
 
+        {detail.detection.model_rationale && (
+          <DetailSectionCard title="Model rationale">
+            <ul className="flat-list">
+              <li>
+                Scoring mode: {detail.detection.model_rationale.scoring_mode}
+              </li>
+              <li>
+                Applied threshold:{" "}
+                {detail.detection.model_rationale.detection_threshold.toFixed(
+                  2,
+                )}
+                {" • "}score{" "}
+                {detail.detection.model_rationale.model_score.toFixed(2)}
+                {" • "}margin{" "}
+                {detail.detection.model_rationale.score_margin.toFixed(2)}
+              </li>
+              <li>
+                Policy scope: {detail.detection.model_rationale.policy_scope}
+              </li>
+              <li>
+                Calibration:{" "}
+                {detail.detection.model_rationale.calibration_source ??
+                  "unknown"}
+                {" • "}
+                {(
+                  detail.detection.model_rationale.calibration_reason ??
+                  "unknown"
+                ).replace(/_/g, " ")}
+              </li>
+            </ul>
+          </DetailSectionCard>
+        )}
+
         {Object.keys(detail.detection.feature_attributions).length > 0 && (
           <DetailSectionCard title="Feature attributions">
             <div className="attribution-bars">
@@ -186,8 +221,24 @@ export function DetectionDetailContent({
         <DetailSectionCard title="Peer context">
           <ul className="flat-list">
             <li>
+              Role and privilege: {detail.peer_comparison.principal_role} •{" "}
+              {detail.peer_comparison.principal_privilege_level}
+            </li>
+            <li>
+              Typical location: {detail.peer_comparison.principal_location}
+            </li>
+            <li>
               Principal events:{" "}
               {formatNumber(detail.peer_comparison.principal_total_events)}
+            </li>
+            <li>
+              Baseline before event:{" "}
+              {formatNumber(detail.peer_comparison.principal_prior_event_count)}{" "}
+              events {" • "}action seen{" "}
+              {formatNumber(
+                detail.peer_comparison.principal_prior_action_count,
+              )}{" "}
+              times
             </li>
             <li>
               Prior accesses to resource:{" "}
@@ -200,6 +251,25 @@ export function DetectionDetailContent({
               {formatNumber(
                 detail.peer_comparison.peer_group_resource_access_count,
               )}
+            </li>
+            <li>
+              Distinct peers on resource:{" "}
+              {formatNumber(
+                detail.peer_comparison.peer_group_resource_principal_count,
+              )}
+              /{formatNumber(detail.peer_comparison.peer_group_principal_count)}
+            </li>
+            <li>
+              Peer sets: dept{" "}
+              {formatNumber(detail.peer_comparison.department_peer_count)}
+              {" • "}mgr{" "}
+              {formatNumber(detail.peer_comparison.manager_peer_count)}
+              {" • "}group{" "}
+              {formatNumber(detail.peer_comparison.group_peer_count)}
+            </li>
+            <li>
+              Geography seen before:{" "}
+              {detail.peer_comparison.geo_seen_before ? "yes" : "no"}
             </li>
           </ul>
         </DetailSectionCard>
@@ -329,6 +399,7 @@ export function IntegrationDetailContent({
   integrationActionItems,
   integrationCoverageCount,
   integrationStatus,
+  runtimeStatus,
 }: IntegrationDetailContentProps) {
   const { source, details } = entry;
   const status = integrationStatus(details);
@@ -337,6 +408,11 @@ export function IntegrationDetailContent({
   const deadLetterReasons = Object.entries(details.dead_letter_reason_counts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 6);
+  const projectedSourceCount =
+    runtimeStatus?.projection.overview?.ops_metadata.event_counts_by_source[
+      source
+    ] ?? 0;
+  const projectionStream = runtimeStatus?.projection.overview?.stream_state;
 
   return (
     <div className="detail-pane">
@@ -521,6 +597,335 @@ export function IntegrationDetailContent({
           </div>
         </DetailSectionCard>
       </div>
+
+      <DetailSectionCard
+        title="Runtime substrate"
+        subtitle="What the local pipeline has actually materialized underneath the demo."
+      >
+        {runtimeStatus === null ? (
+          <div className="panel-note">
+            Runtime substrate status is still loading.
+          </div>
+        ) : (
+          <div className="list-stack list-stack--tight">
+            <div className="mini-card">
+              <div className="record-card__header">
+                <div>
+                  <h3>Event index</h3>
+                  <p className="detail-subtle">
+                    Indexed normalized events available to local investigation
+                    and rebuild paths.
+                  </p>
+                </div>
+                <span
+                  className={`badge badge--${
+                    runtimeStatus.event_index.available
+                      ? "positive"
+                      : "attention"
+                  }`}
+                >
+                  {runtimeStatus.event_index.available ? "Ready" : "Building"}
+                </span>
+              </div>
+              <ul className="flat-list">
+                <li>
+                  Indexed events:{" "}
+                  {formatNumber(runtimeStatus.event_index.event_count)}
+                </li>
+                <li>
+                  Detection context:{" "}
+                  {runtimeStatus.detection_context.available
+                    ? "ready"
+                    : "pending"}
+                  {" • "}
+                  {formatNumber(
+                    runtimeStatus.detection_context.event_count,
+                  )}{" "}
+                  events
+                </li>
+                <li>
+                  Principal keys:{" "}
+                  {formatNumber(runtimeStatus.event_index.principal_key_count)}
+                  {" • "}Resource keys:{" "}
+                  {formatNumber(runtimeStatus.event_index.resource_key_count)}
+                </li>
+                <li>
+                  Departments:{" "}
+                  {formatNumber(runtimeStatus.event_index.department_count)}
+                </li>
+                <li>
+                  This source in projection:{" "}
+                  {formatNumber(projectedSourceCount)}
+                </li>
+              </ul>
+            </div>
+
+            <div className="mini-card">
+              <div className="record-card__header">
+                <div>
+                  <h3>Feature lake</h3>
+                  <p className="detail-subtle">
+                    Durable feature tables used by scoring and investigation.
+                  </p>
+                </div>
+                <span className="badge badge--neutral">
+                  {formatNumber(
+                    runtimeStatus.feature_tables.action_row_count +
+                      runtimeStatus.feature_tables.history_row_count +
+                      runtimeStatus.feature_tables.collaboration_row_count +
+                      runtimeStatus.feature_tables.static_row_count +
+                      runtimeStatus.feature_tables.peer_group_row_count,
+                  )}{" "}
+                  rows
+                </span>
+              </div>
+              <ul className="flat-list">
+                <li>
+                  Scoring input: {runtimeStatus.scoring_input.mode}
+                  {" • "}
+                  {runtimeStatus.scoring_input.ready ? "ready" : "fallback"}
+                </li>
+                <li>{runtimeStatus.scoring_input.reason}</li>
+                <li>
+                  Action/history:{" "}
+                  {formatNumber(runtimeStatus.feature_tables.action_row_count)}
+                  {" / "}
+                  {formatNumber(runtimeStatus.feature_tables.history_row_count)}
+                </li>
+                <li>
+                  Collaboration/static/peer:{" "}
+                  {formatNumber(
+                    runtimeStatus.feature_tables.collaboration_row_count,
+                  )}
+                  {" / "}
+                  {formatNumber(runtimeStatus.feature_tables.static_row_count)}
+                  {" / "}
+                  {formatNumber(
+                    runtimeStatus.feature_tables.peer_group_row_count,
+                  )}
+                </li>
+                <li>
+                  Vocab principals/resources:{" "}
+                  {formatNumber(runtimeStatus.feature_vocab.principal_count)}
+                  {" / "}
+                  {formatNumber(runtimeStatus.feature_vocab.resource_count)}
+                </li>
+              </ul>
+            </div>
+
+            <div className="mini-card">
+              <div className="record-card__header">
+                <div>
+                  <h3>Identity context</h3>
+                  <p className="detail-subtle">
+                    Durable org/profile input backing peer groups and static
+                    features.
+                  </p>
+                </div>
+                <span
+                  className={`badge badge--${
+                    runtimeStatus.identity_profiles.available
+                      ? "positive"
+                      : "attention"
+                  }`}
+                >
+                  {runtimeStatus.identity_profiles.source ?? "unknown"}
+                </span>
+              </div>
+              <ul className="flat-list">
+                <li>
+                  Principals:{" "}
+                  {formatNumber(
+                    runtimeStatus.identity_profiles.principal_count,
+                  )}
+                </li>
+                <li>
+                  Teams:{" "}
+                  {formatNumber(runtimeStatus.identity_profiles.team_count)}
+                </li>
+                <li>
+                  Worker feature runs:{" "}
+                  {formatNumber(runtimeStatus.worker_state.feature_runs)}
+                </li>
+              </ul>
+            </div>
+
+            <div className="mini-card">
+              <div className="record-card__header">
+                <div>
+                  <h3>Model runtime</h3>
+                  <p className="detail-subtle">
+                    Active model policy, eval gate, and recent promotions.
+                  </p>
+                </div>
+                <span
+                  className={`badge badge--${
+                    runtimeStatus.model_runtime.effective_mode === "onnx_native"
+                      ? "positive"
+                      : "attention"
+                  }`}
+                >
+                  {runtimeStatus.model_runtime.effective_mode}
+                </span>
+              </div>
+              <ul className="flat-list">
+                <li>
+                  Requested/effective:{" "}
+                  {runtimeStatus.model_runtime.requested_mode}
+                  {" / "}
+                  {runtimeStatus.model_runtime.effective_mode}
+                </li>
+                <li>
+                  Version: {runtimeStatus.model_runtime.model_version ?? "none"}
+                </li>
+                <li>Reason: {runtimeStatus.model_runtime.reason}</li>
+                <li>
+                  Eval gate:{" "}
+                  {runtimeStatus.model_runtime.activation_gate.eligible
+                    ? "eligible"
+                    : "blocked"}
+                  {" • "}
+                  {runtimeStatus.model_runtime.activation_gate.reason}
+                </li>
+                {runtimeStatus.model_runtime.activation_gate
+                  .evaluation_scope ? (
+                  <li>
+                    Eval scope/top1/win-rate:{" "}
+                    {
+                      runtimeStatus.model_runtime.activation_gate
+                        .evaluation_scope
+                    }
+                    {" • "}
+                    {runtimeStatus.model_runtime.activation_gate.sampled_top1_accuracy?.toFixed(
+                      2,
+                    ) ?? "n/a"}
+                    {" • "}
+                    {runtimeStatus.model_runtime.activation_gate.pairwise_win_rate?.toFixed(
+                      2,
+                    ) ?? "n/a"}
+                  </li>
+                ) : null}
+                {runtimeStatus.model_runtime.activation_gate.mean_margin !=
+                null ? (
+                  <li>
+                    Mean margin:{" "}
+                    {runtimeStatus.model_runtime.activation_gate.mean_margin.toFixed(
+                      3,
+                    )}
+                  </li>
+                ) : null}
+                {runtimeStatus.model_runtime.activation_gate
+                  .evaluated_source_count > 0 ? (
+                  <li>
+                    Source gates:{" "}
+                    {Object.entries(
+                      runtimeStatus.model_runtime.activation_gate
+                        .source_gates ?? {},
+                    )
+                      .map(
+                        ([source, gate]) =>
+                          `${source}:${gate.eligible ? "pass" : "block"}`,
+                      )
+                      .join(" • ")}
+                  </li>
+                ) : null}
+                {(
+                  runtimeStatus.model_runtime.activation_gate.failing_sources ??
+                  []
+                ).length > 0 ? (
+                  <li>
+                    Blocking sources:{" "}
+                    {(
+                      runtimeStatus.model_runtime.activation_gate
+                        .failing_sources ?? []
+                    ).join(", ")}
+                  </li>
+                ) : null}
+                {runtimeStatus.model_runtime.activation_gate.coverage_gate ? (
+                  <li>
+                    Coverage gate:{" "}
+                    {runtimeStatus.model_runtime.activation_gate.coverage_gate
+                      .eligible
+                      ? "eligible"
+                      : "blocked"}
+                    {" • "}
+                    {
+                      runtimeStatus.model_runtime.activation_gate.coverage_gate
+                        .reason
+                    }
+                    {" • "}sources{" "}
+                    {(
+                      runtimeStatus.model_runtime.activation_gate.coverage_gate
+                        .covered_sources ?? []
+                    ).join(", ") || "none"}
+                  </li>
+                ) : null}
+                <li>
+                  Installed models:{" "}
+                  {formatNumber(
+                    runtimeStatus.model_runtime.installed_model_count,
+                  )}
+                </li>
+                <li>
+                  Recent promotions:{" "}
+                  {formatNumber(
+                    runtimeStatus.model_runtime.recent_activation_history
+                      .length,
+                  )}
+                </li>
+                {runtimeStatus.model_runtime.recent_activation_history
+                  .slice()
+                  .reverse()
+                  .slice(0, 2)
+                  .map((entry, index) => (
+                    <li key={`${entry.activated_at ?? "none"}-${index}`}>
+                      {entry.action}: {entry.model_id ?? "heuristic"}
+                      {" • "}
+                      {entry.activation_source ?? "unknown"}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+
+            <div className="mini-card">
+              <div className="record-card__header">
+                <div>
+                  <h3>Projection</h3>
+                  <p className="detail-subtle">
+                    Postgres-backed serving state for the UI and API.
+                  </p>
+                </div>
+                <span
+                  className={`badge badge--${
+                    runtimeStatus.projection.available ? "positive" : "critical"
+                  }`}
+                >
+                  {runtimeStatus.projection.available ? "Connected" : "Offline"}
+                </span>
+              </div>
+              <ul className="flat-list">
+                <li>
+                  Projected normalized events:{" "}
+                  {formatNumber(projectionStream?.normalized_event_count ?? 0)}
+                </li>
+                <li>
+                  Projected detections:{" "}
+                  {formatNumber(projectionStream?.detection_count ?? 0)}
+                </li>
+                <li>
+                  Pending intake batches:{" "}
+                  {formatNumber(runtimeStatus.worker_state.pending_batch_count)}
+                </li>
+              </ul>
+              {runtimeStatus.projection.error ? (
+                <div className="panel-note">
+                  {runtimeStatus.projection.error}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </DetailSectionCard>
     </div>
   );
 }

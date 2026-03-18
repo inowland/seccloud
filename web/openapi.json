@@ -103,6 +103,24 @@
         }
       }
     },
+    "/api/runtime-status": {
+      "get": {
+        "summary": "Runtime Status",
+        "operationId": "runtime_status_api_runtime_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/stream/reset": {
       "post": {
         "summary": "Stream Reset",
@@ -132,7 +150,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 50,
+              "maximum": 10000,
               "minimum": 1,
               "default": 5,
               "title": "Batch Size"
@@ -458,7 +476,6 @@
             "title": "Category"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["source", "verb", "category"],
         "title": "Action"
@@ -528,12 +545,21 @@
             "type": "string",
             "title": "Model Version"
           },
+          "model_rationale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DetectionModelRationale"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "type": "string",
             "title": "Status"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "detection_id",
@@ -551,6 +577,36 @@
           "status"
         ],
         "title": "Detection"
+      },
+      "DetectionContextStatus": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "input_signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Signature"
+          },
+          "context_version": {
+            "type": "integer",
+            "title": "Context Version"
+          }
+        },
+        "type": "object",
+        "required": ["available", "event_count", "context_version"],
+        "title": "DetectionContextStatus"
       },
       "DetectionDetail": {
         "properties": {
@@ -571,7 +627,6 @@
             "title": "Events"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "detection",
@@ -591,7 +646,6 @@
             "title": "Evidence Items"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["evidence_items"],
         "title": "DetectionEvidenceBundle"
@@ -609,10 +663,69 @@
             "$ref": "#/components/schemas/Pagination"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["items", "page"],
         "title": "DetectionList"
+      },
+      "DetectionModelRationale": {
+        "properties": {
+          "scoring_mode": {
+            "type": "string",
+            "title": "Scoring Mode"
+          },
+          "policy_scope": {
+            "type": "string",
+            "title": "Policy Scope"
+          },
+          "detection_threshold": {
+            "type": "number",
+            "title": "Detection Threshold"
+          },
+          "high_severity_threshold": {
+            "type": "number",
+            "title": "High Severity Threshold"
+          },
+          "model_score": {
+            "type": "number",
+            "title": "Model Score"
+          },
+          "score_margin": {
+            "type": "number",
+            "title": "Score Margin"
+          },
+          "calibration_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Source"
+          },
+          "calibration_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scoring_mode",
+          "policy_scope",
+          "detection_threshold",
+          "high_severity_threshold",
+          "model_score",
+          "score_margin"
+        ],
+        "title": "DetectionModelRationale"
       },
       "DetectionPeerComparison": {
         "properties": {
@@ -628,9 +741,29 @@
             "type": "string",
             "title": "Resource Id"
           },
+          "principal_role": {
+            "type": "string",
+            "title": "Principal Role"
+          },
+          "principal_location": {
+            "type": "string",
+            "title": "Principal Location"
+          },
+          "principal_privilege_level": {
+            "type": "string",
+            "title": "Principal Privilege Level"
+          },
           "principal_total_events": {
             "type": "integer",
             "title": "Principal Total Events"
+          },
+          "principal_prior_event_count": {
+            "type": "integer",
+            "title": "Principal Prior Event Count"
+          },
+          "principal_prior_action_count": {
+            "type": "integer",
+            "title": "Principal Prior Action Count"
           },
           "principal_prior_resource_access_count": {
             "type": "integer",
@@ -644,6 +777,26 @@
             "type": "integer",
             "title": "Peer Group Principal Count"
           },
+          "peer_group_resource_principal_count": {
+            "type": "integer",
+            "title": "Peer Group Resource Principal Count"
+          },
+          "department_peer_count": {
+            "type": "integer",
+            "title": "Department Peer Count"
+          },
+          "manager_peer_count": {
+            "type": "integer",
+            "title": "Manager Peer Count"
+          },
+          "group_peer_count": {
+            "type": "integer",
+            "title": "Group Peer Count"
+          },
+          "geo_seen_before": {
+            "type": "boolean",
+            "title": "Geo Seen Before"
+          },
           "detection_reasons": {
             "items": {
               "type": "string"
@@ -652,16 +805,25 @@
             "title": "Detection Reasons"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "principal_id",
           "peer_group",
           "resource_id",
+          "principal_role",
+          "principal_location",
+          "principal_privilege_level",
           "principal_total_events",
+          "principal_prior_event_count",
+          "principal_prior_action_count",
           "principal_prior_resource_access_count",
           "peer_group_resource_access_count",
           "peer_group_principal_count",
+          "peer_group_resource_principal_count",
+          "department_peer_count",
+          "manager_peer_count",
+          "group_peer_count",
+          "geo_seen_before",
           "detection_reasons"
         ],
         "title": "DetectionPeerComparison"
@@ -722,7 +884,6 @@
             "$ref": "#/components/schemas/EvidencePointer"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "event_id",
@@ -739,6 +900,50 @@
         ],
         "title": "Event"
       },
+      "EventIndexStatus": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "principal_key_count": {
+            "type": "integer",
+            "title": "Principal Key Count"
+          },
+          "resource_key_count": {
+            "type": "integer",
+            "title": "Resource Key Count"
+          },
+          "department_count": {
+            "type": "integer",
+            "title": "Department Count"
+          },
+          "input_signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Signature"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "event_count",
+          "principal_key_count",
+          "resource_key_count",
+          "department_count"
+        ],
+        "title": "EventIndexStatus"
+      },
       "EventList": {
         "properties": {
           "items": {
@@ -752,7 +957,6 @@
             "$ref": "#/components/schemas/Pagination"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["items", "page"],
         "title": "EventList"
@@ -779,7 +983,6 @@
             "title": "Retention Expired"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["pointer", "raw_payload", "retention_expired"],
         "title": "EvidenceBundleItem"
@@ -803,10 +1006,57 @@
             "title": "Observed At"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["source", "object_key", "raw_event_id", "observed_at"],
         "title": "EvidencePointer"
+      },
+      "FeatureTableStatus": {
+        "properties": {
+          "action_row_count": {
+            "type": "integer",
+            "title": "Action Row Count"
+          },
+          "history_row_count": {
+            "type": "integer",
+            "title": "History Row Count"
+          },
+          "collaboration_row_count": {
+            "type": "integer",
+            "title": "Collaboration Row Count"
+          },
+          "static_row_count": {
+            "type": "integer",
+            "title": "Static Row Count"
+          },
+          "peer_group_row_count": {
+            "type": "integer",
+            "title": "Peer Group Row Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action_row_count",
+          "history_row_count",
+          "collaboration_row_count",
+          "static_row_count",
+          "peer_group_row_count"
+        ],
+        "title": "FeatureTableStatus"
+      },
+      "FeatureVocabStatus": {
+        "properties": {
+          "principal_count": {
+            "type": "integer",
+            "title": "Principal Count"
+          },
+          "resource_count": {
+            "type": "integer",
+            "title": "Resource Count"
+          }
+        },
+        "type": "object",
+        "required": ["principal_count", "resource_count"],
+        "title": "FeatureVocabStatus"
       },
       "HTTPValidationError": {
         "properties": {
@@ -828,10 +1078,39 @@
             "title": "Status"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["status"],
         "title": "Health"
+      },
+      "IdentityProfilesStatus": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "principal_count": {
+            "type": "integer",
+            "title": "Principal Count"
+          },
+          "team_count": {
+            "type": "integer",
+            "title": "Team Count"
+          }
+        },
+        "type": "object",
+        "required": ["available", "principal_count", "team_count"],
+        "title": "IdentityProfilesStatus"
       },
       "IntakeAccepted": {
         "properties": {
@@ -876,7 +1155,6 @@
             "title": "Queue Path"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "batch_id",
@@ -891,6 +1169,699 @@
           "queue_path"
         ],
         "title": "IntakeAccepted"
+      },
+      "ModelActivationGateStatus": {
+        "properties": {
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "training_pair_count": {
+            "type": "integer",
+            "title": "Training Pair Count"
+          },
+          "final_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Loss"
+          },
+          "evaluation_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluation Scope"
+          },
+          "sampled_top1_accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampled Top1 Accuracy"
+          },
+          "pairwise_win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pairwise Win Rate"
+          },
+          "mean_margin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Margin"
+          },
+          "source_gates": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelSourceActivationGateStatus"
+            },
+            "type": "object",
+            "title": "Source Gates"
+          },
+          "evaluated_source_count": {
+            "type": "integer",
+            "title": "Evaluated Source Count",
+            "default": 0
+          },
+          "failing_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failing Sources"
+          },
+          "coverage_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelCoverageGateStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": ["eligible", "reason", "training_pair_count"],
+        "title": "ModelActivationGateStatus"
+      },
+      "ModelActivationRecord": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "metadata_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Path"
+          },
+          "requested_mode": {
+            "type": "string",
+            "title": "Requested Mode"
+          },
+          "activation_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activation Source"
+          },
+          "activated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated At"
+          }
+        },
+        "type": "object",
+        "required": ["action", "requested_mode"],
+        "title": "ModelActivationRecord"
+      },
+      "ModelCoverageGateStatus": {
+        "properties": {
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "covered_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Covered Sources"
+          },
+          "covered_identity_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Covered Identity Sources"
+          },
+          "covered_resource_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Covered Resource Sources"
+          },
+          "required_source_count": {
+            "type": "integer",
+            "title": "Required Source Count",
+            "default": 0
+          },
+          "require_identity_coverage": {
+            "type": "boolean",
+            "title": "Require Identity Coverage",
+            "default": true
+          },
+          "require_resource_coverage": {
+            "type": "boolean",
+            "title": "Require Resource Coverage",
+            "default": true
+          },
+          "identity_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Identity Sources"
+          },
+          "resource_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resource Sources"
+          }
+        },
+        "type": "object",
+        "required": ["eligible", "reason"],
+        "title": "ModelCoverageGateStatus"
+      },
+      "ModelPromotionPolicyStatus": {
+        "properties": {
+          "required_source_count": {
+            "type": "integer",
+            "title": "Required Source Count",
+            "default": 0
+          },
+          "require_identity_coverage": {
+            "type": "boolean",
+            "title": "Require Identity Coverage",
+            "default": true
+          },
+          "require_resource_coverage": {
+            "type": "boolean",
+            "title": "Require Resource Coverage",
+            "default": true
+          },
+          "identity_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Identity Sources"
+          },
+          "resource_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resource Sources"
+          }
+        },
+        "type": "object",
+        "title": "ModelPromotionPolicyStatus"
+      },
+      "ModelRuntimeStatus": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "requested_mode": {
+            "type": "string",
+            "title": "Requested Mode"
+          },
+          "effective_mode": {
+            "type": "string",
+            "title": "Effective Mode"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Version"
+          },
+          "model_family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Family"
+          },
+          "exported_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exported At"
+          },
+          "metadata_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Path"
+          },
+          "activated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated At"
+          },
+          "activation_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activation Source"
+          },
+          "action_source_count": {
+            "type": "integer",
+            "title": "Action Source Count"
+          },
+          "principal_vocab_count": {
+            "type": "integer",
+            "title": "Principal Vocab Count"
+          },
+          "resource_vocab_count": {
+            "type": "integer",
+            "title": "Resource Vocab Count"
+          },
+          "activation_gate": {
+            "$ref": "#/components/schemas/ModelActivationGateStatus"
+          },
+          "recent_activation_history": {
+            "items": {
+              "$ref": "#/components/schemas/ModelActivationRecord"
+            },
+            "type": "array",
+            "title": "Recent Activation History"
+          },
+          "installed_model_count": {
+            "type": "integer",
+            "title": "Installed Model Count"
+          },
+          "installed_model_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Installed Model Ids"
+          },
+          "score_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelScorePolicyStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "promotion_policy": {
+            "$ref": "#/components/schemas/ModelPromotionPolicyStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "requested_mode",
+          "effective_mode",
+          "reason",
+          "action_source_count",
+          "principal_vocab_count",
+          "resource_vocab_count",
+          "activation_gate",
+          "recent_activation_history",
+          "installed_model_count",
+          "installed_model_ids",
+          "promotion_policy"
+        ],
+        "title": "ModelRuntimeStatus"
+      },
+      "ModelScorePolicyStatus": {
+        "properties": {
+          "detection_threshold": {
+            "type": "number",
+            "title": "Detection Threshold"
+          },
+          "high_severity_threshold": {
+            "type": "number",
+            "title": "High Severity Threshold"
+          },
+          "calibration_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Source"
+          },
+          "calibration_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Reason"
+          },
+          "positive_distance_p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positive Distance P95"
+          },
+          "negative_distance_p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negative Distance P50"
+          },
+          "negative_distance_p90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negative Distance P90"
+          },
+          "evaluation_pair_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluation Pair Count"
+          },
+          "source_policies": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelSourceScorePolicyStatus"
+            },
+            "type": "object",
+            "title": "Source Policies"
+          }
+        },
+        "type": "object",
+        "required": ["detection_threshold", "high_severity_threshold"],
+        "title": "ModelScorePolicyStatus"
+      },
+      "ModelSourceActivationGateStatus": {
+        "properties": {
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "final_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Loss"
+          },
+          "evaluation_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluation Scope"
+          },
+          "sampled_top1_accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampled Top1 Accuracy"
+          },
+          "pairwise_win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pairwise Win Rate"
+          },
+          "mean_margin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Margin"
+          },
+          "pair_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Count"
+          }
+        },
+        "type": "object",
+        "required": ["eligible", "reason"],
+        "title": "ModelSourceActivationGateStatus"
+      },
+      "ModelSourceScorePolicyStatus": {
+        "properties": {
+          "detection_threshold": {
+            "type": "number",
+            "title": "Detection Threshold"
+          },
+          "high_severity_threshold": {
+            "type": "number",
+            "title": "High Severity Threshold"
+          },
+          "calibration_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Source"
+          },
+          "calibration_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Reason"
+          },
+          "positive_distance_p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positive Distance P95"
+          },
+          "negative_distance_p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negative Distance P50"
+          },
+          "negative_distance_p90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negative Distance P90"
+          },
+          "evaluation_pair_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluation Pair Count"
+          }
+        },
+        "type": "object",
+        "required": ["detection_threshold", "high_severity_threshold"],
+        "title": "ModelSourceScorePolicyStatus"
       },
       "OpsMetadata": {
         "properties": {
@@ -942,7 +1913,6 @@
             "title": "Contains Raw Payloads"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["event_counts_by_source", "dead_letter_count"],
         "title": "OpsMetadata"
@@ -956,7 +1926,6 @@
             "$ref": "#/components/schemas/OpsMetadata"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["stream_state", "ops_metadata"],
         "title": "Overview"
@@ -991,7 +1960,6 @@
             "title": "Has More"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["limit", "offset", "returned", "has_more"],
         "title": "Pagination"
@@ -1036,7 +2004,6 @@
             "title": "Attributes"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -1050,6 +2017,38 @@
           "attributes"
         ],
         "title": "Principal"
+      },
+      "ProjectionStatus": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "overview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Overview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": ["available"],
+        "title": "ProjectionStatus"
       },
       "Resource": {
         "properties": {
@@ -1087,7 +2086,6 @@
             "title": "Attributes"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -1100,6 +2098,91 @@
           "attributes"
         ],
         "title": "Resource"
+      },
+      "RuntimeStatus": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "worker_state": {
+            "$ref": "#/components/schemas/WorkerState"
+          },
+          "feature_tables": {
+            "$ref": "#/components/schemas/FeatureTableStatus"
+          },
+          "feature_vocab": {
+            "$ref": "#/components/schemas/FeatureVocabStatus"
+          },
+          "scoring_input": {
+            "$ref": "#/components/schemas/ScoringInputStatus"
+          },
+          "model_runtime": {
+            "$ref": "#/components/schemas/ModelRuntimeStatus"
+          },
+          "event_index": {
+            "$ref": "#/components/schemas/EventIndexStatus"
+          },
+          "detection_context": {
+            "$ref": "#/components/schemas/DetectionContextStatus"
+          },
+          "identity_profiles": {
+            "$ref": "#/components/schemas/IdentityProfilesStatus"
+          },
+          "projection": {
+            "$ref": "#/components/schemas/ProjectionStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "worker_state",
+          "feature_tables",
+          "feature_vocab",
+          "scoring_input",
+          "model_runtime",
+          "event_index",
+          "detection_context",
+          "identity_profiles",
+          "projection"
+        ],
+        "title": "RuntimeStatus"
+      },
+      "ScoringInputStatus": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "materialized_table_count": {
+            "type": "integer",
+            "title": "Materialized Table Count"
+          },
+          "materialized_tables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Materialized Tables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "mode",
+          "reason",
+          "materialized_table_count",
+          "materialized_tables"
+        ],
+        "title": "ScoringInputStatus"
       },
       "SourceCapabilityDetails": {
         "properties": {
@@ -1214,7 +2297,6 @@
             "title": "Dead Letter Reason Counts"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "display_name",
@@ -1251,7 +2333,6 @@
             "title": "Sources"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["source_pack", "sources"],
         "title": "SourceCapabilityMatrix"
@@ -1291,7 +2372,6 @@
             "title": "Pending Batch Count"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "status",
@@ -1320,7 +2400,6 @@
             "title": "Cursor"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["status", "total_source_events", "cursor"],
         "title": "StreamReset"
@@ -1362,7 +2441,6 @@
             "title": "Detection Count"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["cursor", "total_source_events", "complete"],
         "title": "StreamState"
@@ -1408,6 +2486,10 @@
           "normalization_runs": {
             "type": "integer",
             "title": "Normalization Runs"
+          },
+          "feature_runs": {
+            "type": "integer",
+            "title": "Feature Runs"
           },
           "detection_runs": {
             "type": "integer",
@@ -1457,6 +2539,17 @@
               }
             ],
             "title": "Last Normalization At"
+          },
+          "last_feature_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Feature At"
           },
           "last_detection_at": {
             "anyOf": [
@@ -1522,10 +2615,10 @@
             "title": "Processed Batch Count"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "normalization_runs",
+          "feature_runs",
           "detection_runs",
           "source_stats_runs",
           "projection_runs",
