@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -237,13 +238,6 @@ def _print_service_once_summary(result: dict[str, Any]) -> None:
         total_det = detect.get("total_detection_count", 0)
         print(f"  normalized {ingested} events ({landed} landed), detections: {new_det} new ({total_det} total)")
         return
-    if result["status"] == "projected":
-        projection = result.get("result", {}).get("projection", {})
-        print(
-            f"  projection: {projection.get('event_count', 0)} events, "
-            f"{projection.get('detection_count', 0)} detections"
-        )
-        return
     if result["status"] == "materialized":
         print("  source stats: refreshing...")
 
@@ -285,19 +279,13 @@ def _run_rust_detection_threshold_sweep(workspace: Workspace) -> dict[str, Any]:
     return _run_rust_runtime_command(workspace, bin_name="seccloud-detection-threshold-sweep")
 
 
-def _resolved_projection_dsn(dsn: str | None) -> str:
-    if dsn:
-        return dsn
-    from seccloud.projection_store import default_projection_dsn
-
-    return default_projection_dsn()
-
-
 def _run_rust_runtime_command(
     workspace: Workspace,
     *,
     bin_name: str,
     extra_args: list[str] | None = None,
+    capture_output: bool = True,
+    heartbeat_interval_seconds: float | None = None,
 ) -> dict[str, Any]:
     cmd = [
         "cargo",
@@ -315,17 +303,55 @@ def _run_rust_runtime_command(
         cmd.extend(extra_args)
     env = os.environ.copy()
     env.setdefault("RUST_LOG", "info")
+    if not capture_output:
+        with subprocess.Popen(
+            cmd,
+            cwd=_repo_root() / "rust",
+            env=env,
+            text=True,
+        ) as process:
+            last_heartbeat_at = time.monotonic()
+            while True:
+                returncode = process.poll()
+                if returncode is not None:
+                    if returncode != 0:
+                        details = [
+                            f"Rust runtime command failed for {bin_name} with exit code {returncode}.",
+                            f"Command: {' '.join(cmd)}",
+                            "See console output above for the Rust service error.",
+                        ]
+                        raise RuntimeError("\n".join(details))
+                    return {
+                        "status": "exited",
+                        "bin_name": bin_name,
+                        "command": cmd,
+                        "returncode": returncode,
+                    }
+                now = time.monotonic()
+                if heartbeat_interval_seconds is not None and now - last_heartbeat_at >= heartbeat_interval_seconds:
+                    state = get_worker_state(workspace)
+                    print(
+                        "[app:worker] heartbeat: "
+                        f"pending={state.get('pending_batch_count', 0)} "
+                        f"processed={state.get('processed_batch_count', 0)} "
+                        f"service_runs={state.get('service_runs', 0)} "
+                        f"status={state.get('last_service_status') or 'unknown'}",
+                        flush=True,
+                    )
+                    last_heartbeat_at = now
+                time.sleep(1.0)
+
     completed = subprocess.run(
         cmd,
         cwd=_repo_root() / "rust",
         check=False,
-        capture_output=True,
+        capture_output=capture_output,
         text=True,
         env=env,
     )
     if completed.returncode != 0:
-        stderr = (completed.stderr or "").strip()
-        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip() if capture_output else ""
+        stdout = (completed.stdout or "").strip() if capture_output else ""
         details: list[str] = [
             f"Rust runtime command failed for {bin_name} with exit code {completed.returncode}.",
             f"Command: {' '.join(cmd)}",
@@ -351,19 +377,6 @@ def _run_rust_runtime_command(
         raise RuntimeError("\n".join(details)) from exc
 
 
-def _run_rust_projector_worker(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
-    return _run_rust_runtime_command(
-        workspace,
-        bin_name="seccloud-projector",
-        extra_args=[
-            "--tenant-id",
-            workspace.tenant_id,
-            "--dsn",
-            _resolved_projection_dsn(dsn),
-        ],
-    )
-
-
 def _run_rust_service_once(
     workspace: Workspace,
     dsn: str | None = None,
@@ -372,9 +385,9 @@ def _run_rust_service_once(
     extra_args = [
         "--tenant-id",
         workspace.tenant_id,
-        "--dsn",
-        _resolved_projection_dsn(dsn),
     ]
+    if dsn:
+        extra_args.extend(["--dsn", dsn])
     if max_batches is not None:
         extra_args.extend(["--max-batches", str(max_batches)])
     return _run_rust_runtime_command(
@@ -395,11 +408,11 @@ def _run_rust_service_loop(
     extra_args = [
         "--tenant-id",
         workspace.tenant_id,
-        "--dsn",
-        _resolved_projection_dsn(dsn),
         "--poll-interval-seconds",
         str(poll_interval_seconds),
     ]
+    if dsn:
+        extra_args[2:2] = ["--dsn", dsn]
     if max_batches is not None:
         extra_args.extend(["--max-batches", str(max_batches)])
     if max_iterations is not None:
@@ -410,6 +423,8 @@ def _run_rust_service_loop(
         workspace,
         bin_name="seccloud-service-loop",
         extra_args=extra_args,
+        capture_output=False,
+        heartbeat_interval_seconds=10.0,
     )
 
 
@@ -487,12 +502,6 @@ def run_local_processing_workers(
     }
 
 
-def run_projector_worker(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
-    workspace.bootstrap()
-    _require_rust_local_runtime()
-    return _run_rust_projector_worker(workspace, dsn)
-
-
 def run_source_stats_projector(workspace: Workspace) -> dict[str, Any]:
     workspace.bootstrap()
     _require_rust_local_runtime()
@@ -513,9 +522,10 @@ def run_all_local_workers(
     dsn: str | None = None,
     max_batches: int | None = None,
 ) -> dict[str, Any]:
+    from seccloud.runtime_status import build_workspace_overview
+
     processing = run_local_processing_workers(workspace, max_batches=max_batches, dsn=dsn)
     source_stats = _source_stats_summary(workspace)
-    projection = run_projector_worker(workspace, dsn)
     return {
         "normalization": processing["normalization"],
         "features": processing["features"],
@@ -523,7 +533,7 @@ def run_all_local_workers(
         "detect": processing["detect"],
         "ops_metadata": processing["ops_metadata"],
         "source_stats": source_stats,
-        "projection": projection,
+        "overview": build_workspace_overview(workspace),
     }
 
 

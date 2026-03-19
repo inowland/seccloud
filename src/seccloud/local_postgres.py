@@ -8,11 +8,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from seccloud.projection_store import (
-    DEFAULT_PROJECTION_PGDATABASE,
-    DEFAULT_PROJECTION_PGPORT,
-    DEFAULT_PROJECTION_PGUSER,
-)
+DEFAULT_PROJECTION_PGPORT = 55432
+DEFAULT_PROJECTION_PGDATABASE = "seccloud"
+DEFAULT_PROJECTION_PGUSER = "inowland"
 
 
 def _postgres_binary(name: str) -> str:

@@ -413,6 +413,7 @@ button {
   margin: 0 auto;
   height: calc(100dvh - var(--app-pane-top-clearance));
   grid-template-rows: minmax(0, 1fr);
+  align-items: start;
   overflow-y: auto;
 }
 
@@ -790,6 +791,7 @@ button {
 .badge {
   padding: 0.24rem 0.5rem;
   border: 1px solid transparent;
+  font-weight: 600;
 }
 
 .badge--critical {
@@ -908,6 +910,10 @@ button {
 .list-row-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.list-row-actions--spread {
+  justify-content: space-between;
 }
 
 .list-row-action {
@@ -1221,6 +1227,12 @@ button {
   border-radius: 10px;
   background: var(--surface);
   box-shadow: var(--shadow-lg);
+}
+
+.toolbar-menu__panel--wide {
+  width: 340px;
+  max-height: min(70vh, 560px);
+  overflow: auto;
 }
 
 .toolbar-menu__section {
@@ -1645,6 +1657,57 @@ button {
 .action-card--positive {
   border-color: rgba(29, 106, 69, 0.18);
   background: rgba(29, 106, 69, 0.08);
+}
+
+.pipeline-next-step strong {
+  color: var(--text);
+}
+
+.pipeline-checklist {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.pipeline-checklist li {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.pipeline-checklist__body {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.pipeline-advanced-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.pipeline-advanced {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 0.85rem 0.9rem;
+}
+
+.pipeline-advanced__summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.pipeline-advanced__summary::-webkit-details-marker {
+  display: none;
+}
+
+.pipeline-advanced[open] .pipeline-advanced__summary {
+  margin-bottom: 0.75rem;
 }
 
 @media (max-width: 1120px) {

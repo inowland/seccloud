@@ -13,6 +13,7 @@ from seccloud.api_models import (
     Detection,
     DetectionDetail,
     DetectionList,
+    EntityDetail,
     Event,
     EventList,
     Health,
@@ -27,19 +28,15 @@ from seccloud.api_models import (
     WorkerState,
 )
 from seccloud.defaults import DEFAULT_WORKSPACE
+from seccloud.event_query import query_events
 from seccloud.investigation import (
     acknowledge_detection,
     get_detection_detail,
+    get_entity_detail,
     get_event_detail,
+    list_active_detections_page,
 )
-from seccloud.local_postgres import local_postgres_dsn
-from seccloud.projection_store import (
-    fetch_projected_detections,
-    fetch_projected_events,
-    fetch_projection_overview,
-    sync_workspace_projection,
-)
-from seccloud.runtime_status import build_runtime_status
+from seccloud.runtime_status import build_runtime_status, build_workspace_overview
 from seccloud.runtime_stream import (
     advance_runtime_stream,
     get_runtime_stream_state,
@@ -53,11 +50,12 @@ from seccloud.workers import (
     get_worker_state,
     submit_raw_events,
 )
+from seccloud.workflow_store import get_workflow_dsn
 
 
 def create_app() -> FastAPI:
     workspace_root = Path(os.environ.get("SECCLOUD_WORKSPACE", DEFAULT_WORKSPACE))
-    dsn = os.environ.get("SECCLOUD_PROJECTION_DSN") or local_postgres_dsn(Path.cwd())
+    dsn = get_workflow_dsn()
     push_max_records = int(os.environ.get("SECCLOUD_PUSH_MAX_RECORDS", "5000"))
     push_max_body_bytes = int(os.environ.get("SECCLOUD_PUSH_MAX_BODY_BYTES", str(5 * 1024 * 1024)))
 
@@ -203,23 +201,43 @@ def create_app() -> FastAPI:
 
     @app.get("/api/overview", response_model=Overview)
     def overview() -> dict:
-        return fetch_projection_overview(dsn)
+        return build_workspace_overview(workspace(), dsn=dsn)
 
     @app.get("/api/events", response_model=EventList)
     def events(
         limit: int = Query(default=50, ge=1, le=200),
-        offset: int = Query(default=0, ge=0),
+        cursor: str | None = Query(default=None),
+        start_time: str | None = Query(default=None),
+        end_time: str | None = Query(default=None),
+        query_text: str | None = Query(default=None, alias="query"),
+        sources: list[str] | None = Query(default=None),
+        action_categories: list[str] | None = Query(default=None),
+        sensitivities: list[str] | None = Query(default=None),
+        principal_reference: str | None = Query(default=None),
+        resource_reference: str | None = Query(default=None),
     ) -> dict:
         ws = workspace()
-        return fetch_projected_events(tenant_id=ws.tenant_id, limit=limit, offset=offset, dsn=dsn)
+        return query_events(
+            ws,
+            limit=limit,
+            cursor=cursor,
+            start_time=start_time,
+            end_time=end_time,
+            query_text=query_text,
+            sources=sources,
+            action_categories=action_categories,
+            sensitivities=sensitivities,
+            principal_reference=principal_reference,
+            resource_reference=resource_reference,
+            dsn=dsn,
+        )
 
     @app.get("/api/detections", response_model=DetectionList)
     def detections(
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> dict:
-        ws = workspace()
-        return fetch_projected_detections(tenant_id=ws.tenant_id, limit=limit, offset=offset, dsn=dsn)
+        return list_active_detections_page(workspace(), limit=limit, offset=offset, dsn=dsn)
 
     @app.get("/api/detections/{detection_id}", response_model=DetectionDetail)
     def detection_detail(detection_id: str) -> dict:
@@ -228,14 +246,24 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Detection not found: {detection_id}")
         return get_detection_detail(ws, detection_id, dsn=dsn)
 
+    @app.get("/api/entities/{principal_key}", response_model=EntityDetail)
+    def entity_detail(
+        principal_key: str,
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict:
+        ws = workspace()
+        detail = get_entity_detail(ws, principal_key, limit=limit, dsn=dsn)
+        if detail is None:
+            raise HTTPException(status_code=404, detail=f"Entity not found: {principal_key}")
+        return detail
+
     @app.post("/api/detections/{detection_id}/acknowledge", response_model=Detection)
     def detection_acknowledge(detection_id: str) -> dict:
         ws = workspace()
         try:
-            detection = acknowledge_detection(ws, detection_id)
+            detection = acknowledge_detection(ws, detection_id, dsn=dsn)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        sync_workspace_projection(ws, dsn)
         return detection
 
     @app.get("/api/source-capability", response_model=SourceCapabilityMatrix)

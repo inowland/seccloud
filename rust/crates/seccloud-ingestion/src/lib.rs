@@ -18,7 +18,6 @@ pub mod local_runtime;
 pub mod model_runtime;
 pub mod model_scoring;
 pub mod normalize;
-pub mod projector;
 pub mod routes;
 pub mod runtime;
 pub mod service;

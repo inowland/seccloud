@@ -235,14 +235,156 @@
             }
           },
           {
-            "name": "offset",
+            "name": "cursor",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "start_time",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start Time"
+            }
+          },
+          {
+            "name": "end_time",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End Time"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sources"
+            }
+          },
+          {
+            "name": "action_categories",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action Categories"
+            }
+          },
+          {
+            "name": "sensitivities",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sensitivities"
+            }
+          },
+          {
+            "name": "principal_reference",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Principal Reference"
+            }
+          },
+          {
+            "name": "resource_reference",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Reference"
             }
           }
         ],
@@ -345,6 +487,57 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DetectionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/entities/{principal_key}": {
+      "get": {
+        "summary": "Entity Detail",
+        "operationId": "entity_detail_api_entities__principal_key__get",
+        "parameters": [
+          {
+            "name": "principal_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Principal Key"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityDetail"
                 }
               }
             }
@@ -479,6 +672,49 @@
         "type": "object",
         "required": ["source", "verb", "category"],
         "title": "Action"
+      },
+      "CanonicalEventStoreStatus": {
+        "properties": {
+          "canonical_store": {
+            "type": "string",
+            "title": "Canonical Store"
+          },
+          "canonical_format": {
+            "type": "string",
+            "title": "Canonical Format"
+          },
+          "query_backend": {
+            "type": "string",
+            "title": "Query Backend"
+          },
+          "detail_hydration": {
+            "type": "string",
+            "title": "Detail Hydration"
+          },
+          "cursor_query_support": {
+            "type": "boolean",
+            "title": "Cursor Query Support"
+          },
+          "text_query_support": {
+            "type": "boolean",
+            "title": "Text Query Support"
+          },
+          "time_range_support": {
+            "type": "boolean",
+            "title": "Time Range Support"
+          }
+        },
+        "type": "object",
+        "required": [
+          "canonical_store",
+          "canonical_format",
+          "query_backend",
+          "detail_hydration",
+          "cursor_query_support",
+          "text_query_support",
+          "time_range_support"
+        ],
+        "title": "CanonicalEventStoreStatus"
       },
       "Detection": {
         "properties": {
@@ -828,6 +1064,92 @@
         ],
         "title": "DetectionPeerComparison"
       },
+      "EntityDetail": {
+        "properties": {
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "overview": {
+            "$ref": "#/components/schemas/EntityOverview"
+          },
+          "peer_comparison": {
+            "$ref": "#/components/schemas/DetectionPeerComparison"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "title": "Timeline"
+          }
+        },
+        "type": "object",
+        "required": ["principal", "overview", "peer_comparison", "timeline"],
+        "title": "EntityDetail"
+      },
+      "EntityOverview": {
+        "properties": {
+          "latest_observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Observed At"
+          },
+          "first_observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Observed At"
+          },
+          "timeline_event_count": {
+            "type": "integer",
+            "title": "Timeline Event Count"
+          },
+          "total_event_count": {
+            "type": "integer",
+            "title": "Total Event Count"
+          },
+          "distinct_source_count": {
+            "type": "integer",
+            "title": "Distinct Source Count"
+          },
+          "distinct_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Distinct Sources"
+          },
+          "distinct_resource_count": {
+            "type": "integer",
+            "title": "Distinct Resource Count"
+          },
+          "high_sensitivity_event_count": {
+            "type": "integer",
+            "title": "High Sensitivity Event Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timeline_event_count",
+          "total_event_count",
+          "distinct_source_count",
+          "distinct_sources",
+          "distinct_resource_count",
+          "high_sensitivity_event_count"
+        ],
+        "title": "EntityOverview"
+      },
       "Event": {
         "properties": {
           "event_id": {
@@ -954,12 +1276,102 @@
             "title": "Items"
           },
           "page": {
-            "$ref": "#/components/schemas/Pagination"
+            "$ref": "#/components/schemas/EventQueryPage"
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/EventQueryFreshness"
           }
         },
         "type": "object",
-        "required": ["items", "page"],
+        "required": ["items", "page", "freshness"],
         "title": "EventList"
+      },
+      "EventQueryFreshness": {
+        "properties": {
+          "query_backend": {
+            "type": "string",
+            "title": "Query Backend"
+          },
+          "canonical_store": {
+            "type": "string",
+            "title": "Canonical Store"
+          },
+          "canonical_format": {
+            "type": "string",
+            "title": "Canonical Format"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "current"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "watermark_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark At"
+          }
+        },
+        "type": "object",
+        "required": ["query_backend", "canonical_store", "canonical_format"],
+        "title": "EventQueryFreshness"
+      },
+      "EventQueryPage": {
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "returned": {
+            "type": "integer",
+            "title": "Returned"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": ["limit", "returned", "has_more"],
+        "title": "EventQueryPage"
       },
       "EvidenceBundleItem": {
         "properties": {
@@ -1169,6 +1581,34 @@
           "queue_path"
         ],
         "title": "IntakeAccepted"
+      },
+      "IntakeStatus": {
+        "properties": {
+          "pending_batch_count": {
+            "type": "integer",
+            "title": "Pending Batch Count"
+          },
+          "processed_batch_count": {
+            "type": "integer",
+            "title": "Processed Batch Count"
+          },
+          "submitted_batch_count": {
+            "type": "integer",
+            "title": "Submitted Batch Count"
+          },
+          "accepted_idempotency_key_count": {
+            "type": "integer",
+            "title": "Accepted Idempotency Key Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pending_batch_count",
+          "processed_batch_count",
+          "submitted_batch_count",
+          "accepted_idempotency_key_count"
+        ],
+        "title": "IntakeStatus"
       },
       "ModelActivationGateStatus": {
         "properties": {
@@ -1964,6 +2404,39 @@
         "required": ["limit", "offset", "returned", "has_more"],
         "title": "Pagination"
       },
+      "PostgresStatus": {
+        "properties": {
+          "root": {
+            "type": "string",
+            "title": "Root"
+          },
+          "dsn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dsn"
+          },
+          "paths": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Paths"
+          },
+          "initialized": {
+            "type": "boolean",
+            "title": "Initialized"
+          }
+        },
+        "type": "object",
+        "required": ["root", "paths", "initialized"],
+        "title": "PostgresStatus"
+      },
       "Principal": {
         "properties": {
           "id": {
@@ -2018,23 +2491,74 @@
         ],
         "title": "Principal"
       },
-      "ProjectionStatus": {
+      "QuickwitStatus": {
         "properties": {
-          "available": {
-            "type": "boolean",
-            "title": "Available"
+          "root": {
+            "type": "string",
+            "title": "Root"
           },
-          "overview": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "index_id": {
+            "type": "string",
+            "title": "Index Id"
+          },
+          "config_path": {
+            "type": "string",
+            "title": "Config Path"
+          },
+          "log_path": {
+            "type": "string",
+            "title": "Log Path"
+          },
+          "paths": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Paths"
+          },
+          "initialized": {
+            "type": "boolean",
+            "title": "Initialized"
+          },
+          "pid": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Overview"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Pid"
           },
-          "error": {
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "rss_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rss Bytes"
+          },
+          "log_size_bytes": {
+            "type": "integer",
+            "title": "Log Size Bytes"
+          },
+          "last_start_attempted_at": {
             "anyOf": [
               {
                 "type": "string"
@@ -2043,12 +2567,127 @@
                 "type": "null"
               }
             ],
-            "title": "Error"
+            "title": "Last Start Attempted At"
+          },
+          "last_start_completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Start Completed At"
+          },
+          "last_start_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Start Duration Ms"
+          },
+          "last_start_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Start Status"
+          },
+          "last_start_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Start Error"
+          },
+          "watermark_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark At"
+          },
+          "indexed_event_count": {
+            "type": "integer",
+            "title": "Indexed Event Count"
+          },
+          "last_sync_completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync Completed At"
+          },
+          "last_sync_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync Duration Ms"
+          },
+          "last_sync_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync Status"
+          },
+          "last_sync_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync Error"
           }
         },
         "type": "object",
-        "required": ["available"],
-        "title": "ProjectionStatus"
+        "required": [
+          "root",
+          "url",
+          "index_id",
+          "config_path",
+          "log_path",
+          "paths",
+          "initialized",
+          "running",
+          "ready",
+          "log_size_bytes",
+          "indexed_event_count"
+        ],
+        "title": "QuickwitStatus"
       },
       "Resource": {
         "properties": {
@@ -2101,9 +2740,16 @@
       },
       "RuntimeStatus": {
         "properties": {
+          "workspace": {
+            "type": "string",
+            "title": "Workspace"
+          },
           "tenant_id": {
             "type": "string",
             "title": "Tenant Id"
+          },
+          "stream_state": {
+            "$ref": "#/components/schemas/StreamState"
           },
           "worker_state": {
             "$ref": "#/components/schemas/WorkerState"
@@ -2123,28 +2769,46 @@
           "event_index": {
             "$ref": "#/components/schemas/EventIndexStatus"
           },
+          "canonical_event_store": {
+            "$ref": "#/components/schemas/CanonicalEventStoreStatus"
+          },
+          "quickwit": {
+            "$ref": "#/components/schemas/QuickwitStatus"
+          },
           "detection_context": {
             "$ref": "#/components/schemas/DetectionContextStatus"
           },
           "identity_profiles": {
             "$ref": "#/components/schemas/IdentityProfilesStatus"
           },
-          "projection": {
-            "$ref": "#/components/schemas/ProjectionStatus"
+          "worker_control": {
+            "$ref": "#/components/schemas/WorkerControlStatus"
+          },
+          "intake": {
+            "$ref": "#/components/schemas/IntakeStatus"
+          },
+          "postgres": {
+            "$ref": "#/components/schemas/PostgresStatus"
           }
         },
         "type": "object",
         "required": [
+          "workspace",
           "tenant_id",
+          "stream_state",
           "worker_state",
           "feature_tables",
           "feature_vocab",
           "scoring_input",
           "model_runtime",
           "event_index",
+          "canonical_event_store",
+          "quickwit",
           "detection_context",
           "identity_profiles",
-          "projection"
+          "worker_control",
+          "intake",
+          "postgres"
         ],
         "title": "RuntimeStatus"
       },
@@ -2481,6 +3145,28 @@
         "required": ["loc", "msg", "type"],
         "title": "ValidationError"
       },
+      "WorkerControlStatus": {
+        "properties": {
+          "source_stats_refresh_requested": {
+            "type": "boolean",
+            "title": "Source Stats Refresh Requested"
+          },
+          "source_stats_refresh_requested_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Stats Refresh Requested At"
+          }
+        },
+        "type": "object",
+        "required": ["source_stats_refresh_requested"],
+        "title": "WorkerControlStatus"
+      },
       "WorkerState": {
         "properties": {
           "normalization_runs": {
@@ -2498,10 +3184,6 @@
           "source_stats_runs": {
             "type": "integer",
             "title": "Source Stats Runs"
-          },
-          "projection_runs": {
-            "type": "integer",
-            "title": "Projection Runs"
           },
           "service_runs": {
             "type": "integer",
@@ -2573,17 +3255,6 @@
             ],
             "title": "Last Source Stats At"
           },
-          "last_projection_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Projection At"
-          },
           "last_service_at": {
             "anyOf": [
               {
@@ -2621,7 +3292,6 @@
           "feature_runs",
           "detection_runs",
           "source_stats_runs",
-          "projection_runs",
           "service_runs",
           "pending_batch_count",
           "processed_batch_count"

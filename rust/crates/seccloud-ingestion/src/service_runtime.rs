@@ -5,7 +5,6 @@ use serde_json::{Map, Value};
 use crate::detector;
 use crate::feature_runtime;
 use crate::local_runtime;
-use crate::projector;
 use crate::runtime::LocalRuntimeContext;
 use crate::worker;
 
@@ -18,7 +17,6 @@ pub struct ServiceOnceResult {
     pub pending_batch_count: usize,
     pub processed_batch_count: usize,
     pub source_stats_refresh_requested: bool,
-    pub projection_refresh_requested: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
 }
@@ -77,31 +75,19 @@ fn latest_timestamp<'a>(timestamps: impl IntoIterator<Item = Option<&'a str>>) -
 fn refresh_requests_from_state(
     control: &local_runtime::WorkerControlFile,
     worker_state: &local_runtime::WorkerStateFile,
-) -> (bool, bool) {
+) -> bool {
     let latest_materialized = latest_timestamp([
         worker_state.last_normalization_at.as_deref(),
         worker_state.last_feature_at.as_deref(),
         worker_state.last_detection_at.as_deref(),
     ]);
-    let source_stats_requested = control.source_stats_refresh_requested
+    control.source_stats_refresh_requested
         || latest_materialized.is_some_and(|latest| {
             worker_state
                 .last_source_stats_at
                 .as_deref()
                 .is_none_or(|current| current < latest)
-        });
-    let projection_requested = control.projection_refresh_requested
-        || latest_timestamp([
-            latest_materialized,
-            worker_state.last_source_stats_at.as_deref(),
-        ])
-        .is_some_and(|latest| {
-            worker_state
-                .last_projection_at
-                .as_deref()
-                .is_none_or(|current| current < latest)
-        });
-    (source_stats_requested, projection_requested)
+        })
 }
 
 pub async fn run_service_once(
@@ -113,22 +99,20 @@ pub async fn run_service_once(
     let pending_batch_count = queue.list_pending(runtime.tenant_id()).await?.len();
     let control = local_runtime::load_worker_control(runtime.workspace())?;
     let worker_state = local_runtime::load_worker_state(runtime.workspace())?;
-    let (source_stats_requested, projection_requested) =
-        refresh_requests_from_state(&control, &worker_state);
+    let source_stats_requested = refresh_requests_from_state(&control, &worker_state);
 
     tracing::info!(
         workspace = %runtime.workspace().display(),
         tenant_id = runtime.tenant_id(),
         pending_batch_count_before = pending_batch_count,
         source_stats_refresh_requested = source_stats_requested,
-        projection_refresh_requested = projection_requested,
         max_batches = ?max_batches,
         "starting service iteration"
     );
 
     local_runtime::mark_service_started(runtime.workspace())?;
 
-    if pending_batch_count == 0 && !source_stats_requested && !projection_requested {
+    if pending_batch_count == 0 && !source_stats_requested {
         tracing::info!(
             workspace = %runtime.workspace().display(),
             tenant_id = runtime.tenant_id(),
@@ -143,7 +127,6 @@ pub async fn run_service_once(
             pending_batch_count: 0,
             processed_batch_count: runtime.count_processed_batches()?,
             source_stats_refresh_requested: source_stats_requested,
-            projection_refresh_requested: projection_requested,
             result: None,
         });
     }
@@ -166,27 +149,7 @@ pub async fn run_service_once(
                 local_runtime::source_stats_summary(&stats),
             );
         }
-        if projection_requested {
-            tracing::info!(
-                workspace = %runtime.workspace().display(),
-                tenant_id = runtime.tenant_id(),
-                "syncing projection"
-            );
-            let projection = projector::sync_workspace_projection(
-                runtime.workspace(),
-                runtime.tenant_id(),
-                runtime.require_dsn()?,
-            )
-            .context("projection sync failed")?;
-            local_runtime::clear_projection_refresh_request(runtime.workspace())?;
-            local_runtime::record_projection_run(runtime.workspace())?;
-            result.insert("projection".to_string(), serde_json::to_value(projection)?);
-        }
-        let status = if projection_requested {
-            "projected"
-        } else {
-            "materialized"
-        };
+        let status = "materialized";
         local_runtime::finalize_service_status(runtime.workspace(), status)?;
         return Ok(ServiceOnceResult {
             status: status.to_string(),
@@ -196,7 +159,6 @@ pub async fn run_service_once(
             pending_batch_count: queue.list_pending(runtime.tenant_id()).await?.len(),
             processed_batch_count: runtime.count_processed_batches()?,
             source_stats_refresh_requested: source_stats_requested,
-            projection_refresh_requested: projection_requested,
             result: Some(Value::Object(result)),
         });
     }
@@ -253,23 +215,10 @@ pub async fn run_service_once(
         tenant_id = runtime.tenant_id(),
         "running detection worker"
     );
-    let detection =
-        detector::run_detection_worker(runtime.workspace()).context("detection worker failed")?;
+    let detection = detector::run_detection_worker_async(runtime.workspace())
+        .await
+        .context("detection worker failed")?;
     local_runtime::record_detection_run(runtime.workspace())?;
-
-    tracing::info!(
-        workspace = %runtime.workspace().display(),
-        tenant_id = runtime.tenant_id(),
-        "syncing projection"
-    );
-    let projection = projector::sync_workspace_projection(
-        runtime.workspace(),
-        runtime.tenant_id(),
-        runtime.require_dsn()?,
-    )
-    .context("projection sync failed")?;
-    local_runtime::clear_projection_refresh_request(runtime.workspace())?;
-    local_runtime::record_projection_run(runtime.workspace())?;
 
     local_runtime::finalize_service_status(runtime.workspace(), "processed")?;
     let pending_after = queue.list_pending(runtime.tenant_id()).await?.len();
@@ -298,8 +247,6 @@ pub async fn run_service_once(
         serde_json::to_value(detection.ops_metadata)?,
     );
     result.insert("source_stats".to_string(), source_stats_summary(runtime)?);
-    result.insert("projection".to_string(), serde_json::to_value(projection)?);
-
     Ok(ServiceOnceResult {
         status: "processed".to_string(),
         workspace: runtime.workspace().display().to_string(),
@@ -308,7 +255,6 @@ pub async fn run_service_once(
         pending_batch_count: pending_after,
         processed_batch_count: runtime.count_processed_batches()?,
         source_stats_refresh_requested: source_stats_requested,
-        projection_refresh_requested: projection_requested,
         result: Some(Value::Object(result)),
     })
 }
@@ -319,38 +265,30 @@ mod tests {
     use crate::local_runtime::{WorkerControlFile, WorkerStateFile};
 
     #[test]
-    fn refresh_requests_trigger_when_projection_and_stats_are_stale() {
+    fn refresh_requests_trigger_when_source_stats_are_stale() {
         let control = WorkerControlFile::default();
         let worker_state = WorkerStateFile {
             last_normalization_at: Some("2026-03-17T23:45:33Z".into()),
             last_feature_at: Some("2026-03-17T23:45:38Z".into()),
             last_detection_at: Some("2026-03-17T23:45:40Z".into()),
             last_source_stats_at: Some("2026-03-17T23:40:00Z".into()),
-            last_projection_at: Some("2026-03-17T23:40:23Z".into()),
             ..WorkerStateFile::default()
         };
 
-        let (source_stats_requested, projection_requested) =
-            refresh_requests_from_state(&control, &worker_state);
-
-        assert!(source_stats_requested);
-        assert!(projection_requested);
+        assert!(refresh_requests_from_state(&control, &worker_state));
     }
 
     #[test]
-    fn explicit_control_requests_are_preserved() {
+    fn explicit_source_stats_control_request_is_preserved() {
         let control = WorkerControlFile {
-            projection_refresh_requested: true,
-            projection_refresh_requested_at: Some("2026-03-17T23:41:00Z".into()),
             source_stats_refresh_requested: true,
             source_stats_refresh_requested_at: Some("2026-03-17T23:41:00Z".into()),
         };
 
-        let (source_stats_requested, projection_requested) =
-            refresh_requests_from_state(&control, &WorkerStateFile::default());
-
-        assert!(source_stats_requested);
-        assert!(projection_requested);
+        assert!(refresh_requests_from_state(
+            &control,
+            &WorkerStateFile::default()
+        ));
     }
 }
 

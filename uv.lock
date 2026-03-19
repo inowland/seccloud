@@ -1113,19 +1113,15 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "numpy" },
+    { name = "onnx" },
+    { name = "onnxruntime" },
+    { name = "onnxscript" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pyarrow" },
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "torch" },
     { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-onnx = [
-    { name = "onnx" },
-    { name = "onnxruntime" },
-    { name = "onnxscript" },
 ]
 
 [package.dev-dependencies]
@@ -1140,9 +1136,9 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.135.1" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "onnx", marker = "extra == 'onnx'", specifier = ">=1.17" },
-    { name = "onnxruntime", marker = "extra == 'onnx'", specifier = ">=1.20" },
-    { name = "onnxscript", marker = "extra == 'onnx'", specifier = ">=0.1" },
+    { name = "onnx", specifier = ">=1.17" },
+    { name = "onnxruntime", specifier = ">=1.20" },
+    { name = "onnxscript", specifier = ">=0.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.3" },
     { name = "pyarrow" },
     { name = "scikit-learn", specifier = ">=1.6" },
@@ -1150,7 +1146,6 @@ requires-dist = [
     { name = "torch", specifier = ">=2.6" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
-provides-extras = ["onnx"]
 
 [package.metadata.requires-dev]
 dev = [

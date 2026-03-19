@@ -444,7 +444,8 @@ def export_workspace_model_artifact(
         )
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "ONNX export dependencies are missing; install the Python ONNX export stack before exporting a model"
+            "ONNX export dependencies are missing; run `uv sync` to install the demo model export stack "
+            "before exporting a model"
         ) from exc
 
     manifest = (

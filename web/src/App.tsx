@@ -12,8 +12,10 @@ import {
 import type { components, paths } from "./api.generated";
 import {
   DetectionDetailContent,
+  EntityDetailContent,
   EventDetailContent,
   IntegrationDetailContent,
+  PipelineStatusContent,
   type IntegrationEntry,
 } from "./detail-content";
 import {
@@ -41,8 +43,6 @@ const navPaneCollapsedStorageKey = "seccloud.nav-pane-collapsed";
 const eventListColumnsStorageKey = "seccloud.events.columns";
 const eventListDensityStorageKey = "seccloud.events.density";
 const eventListSortStorageKey = "seccloud.events.sort";
-const detectionListDensityStorageKey = "seccloud.detections.density";
-const integrationListDensityStorageKey = "seccloud.integrations.density";
 const splitPaneDefaultWidth = 820;
 const splitPaneMinWidth = 320;
 const splitPaneDetailMinWidth = 360;
@@ -66,10 +66,12 @@ type EventList = JsonResponse<"/api/events", "get">;
 type EventRecord = components["schemas"]["Event"];
 type EventDetail = JsonResponse<"/api/events/{event_id}", "get">;
 type DetectionDetail = JsonResponse<"/api/detections/{detection_id}", "get">;
+type EntityDetail = JsonResponse<"/api/entities/{principal_key}", "get">;
 type Detection = components["schemas"]["Detection"];
 type SourceCapabilityMatrix = JsonResponse<"/api/source-capability", "get">;
 type SourceCapabilityDetails = components["schemas"]["SourceCapabilityDetails"];
-type Pagination = components["schemas"]["Pagination"];
+type DetectionPagination = components["schemas"]["Pagination"];
+type EventQueryPage = components["schemas"]["EventQueryPage"];
 type RuntimeStatus = JsonResponse<"/api/runtime-status", "get">;
 interface AppData {
   overview: Overview;
@@ -83,6 +85,7 @@ interface Counts {
   events: number | null;
   detections: number;
   integrations: number;
+  pipeline: number;
 }
 
 interface PageMeta {
@@ -92,7 +95,7 @@ interface PageMeta {
 }
 
 interface PagerProps {
-  page: Pagination;
+  page: DetectionPagination;
   label: string;
   onPrevious: () => void;
   onNext: () => void;
@@ -103,6 +106,7 @@ interface DetailPaneProps {
   selectedItem: SelectedItem | null;
   detailBusy: boolean;
   onAcknowledgeDetection: (detectionId: string) => void;
+  openEntityPage: (principalKey: string) => void;
   openEventPage: (eventId: string) => void;
 }
 
@@ -149,6 +153,12 @@ interface ActionCard {
   tone: BadgeTone;
 }
 
+interface DetectionGroup {
+  key: string;
+  title: string;
+  items: Detection[];
+}
+
 type EventColumnKey =
   | "observedAt"
   | "actor"
@@ -174,6 +184,27 @@ interface EventColumnPreset {
 
 type EventDensity = "comfortable" | "compact";
 type EventSortDirection = "asc" | "desc";
+type DetectionGroupMode = "none" | "principal" | "scenario";
+type DetectionSortMode =
+  | "highest_signal"
+  | "principal_story"
+  | "scenario_story";
+
+interface EventFilters {
+  sources: string[];
+  actionCategories: string[];
+  sensitivities: string[];
+}
+
+type EventTimeRange = "24h" | "7d" | "30d" | "all";
+
+interface DetectionFilters {
+  severities: string[];
+  statuses: string[];
+  sources: string[];
+  scenarios: string[];
+  principals: string[];
+}
 
 interface EventSortState {
   column: EventColumnKey;
@@ -184,6 +215,11 @@ type SelectedItem =
   | { type: "detection"; id: string; data: DetectionDetail }
   | { type: "event"; id: string; data: EventDetail };
 
+interface SelectedEntity {
+  id: string;
+  data: EntityDetail;
+}
+
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -192,12 +228,32 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 });
 const numberFormatter = new Intl.NumberFormat("en-US");
 
-const emptyPagination: Pagination = {
+const emptyPagination: DetectionPagination = {
   limit: 0,
   offset: 0,
   returned: 0,
   total: null,
   has_more: false,
+};
+const emptyEventPage: EventQueryPage = {
+  limit: 0,
+  returned: 0,
+  has_more: false,
+  cursor: null,
+  next_cursor: null,
+};
+const allFilterKey = "__all__";
+const defaultEventFilters: EventFilters = {
+  sources: [allFilterKey],
+  actionCategories: [allFilterKey],
+  sensitivities: [allFilterKey],
+};
+const defaultDetectionFilters: DetectionFilters = {
+  severities: [allFilterKey],
+  statuses: [allFilterKey],
+  sources: [allFilterKey],
+  scenarios: [allFilterKey],
+  principals: [allFilterKey],
 };
 const eventColumnOptions: EventColumnOption[] = [
   { key: "observedAt", label: "Observed" },
@@ -273,9 +329,58 @@ function buildListUrl(path: string, limit: number, offset: number): string {
   return `${path}?limit=${limit}&offset=${offset}`;
 }
 
+function buildEventsUrl(
+  limit: number,
+  cursor: string | null,
+  filters: EventFilters,
+  queryText: string,
+  timeRange: EventTimeRange,
+): string {
+  const params = new URLSearchParams({
+    limit: String(limit),
+  });
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+  if (queryText.trim().length > 0) {
+    params.set("query", queryText.trim());
+  }
+  const startTime = startTimeForRange(timeRange);
+  if (startTime) {
+    params.set("start_time", startTime);
+  }
+  if (isFilterActive(filters.sources)) {
+    filters.sources.forEach((value) => params.append("sources", value));
+  }
+  if (isFilterActive(filters.actionCategories)) {
+    filters.actionCategories.forEach((value) =>
+      params.append("action_categories", value),
+    );
+  }
+  if (isFilterActive(filters.sensitivities)) {
+    filters.sensitivities.forEach((value) =>
+      params.append("sensitivities", value),
+    );
+  }
+  return `/api/events?${params.toString()}`;
+}
+
+function startTimeForRange(range: EventTimeRange): string | null {
+  if (range === "all") {
+    return null;
+  }
+  const now = new Date();
+  const hours = range === "24h" ? 24 : range === "7d" ? 24 * 7 : 24 * 30;
+  now.setHours(now.getHours() - hours);
+  return now.toISOString();
+}
+
 async function fetchDashboardData(
   queueOffset: number,
-  eventsOffset: number,
+  eventsCursor: string | null,
+  eventFilters: EventFilters,
+  eventQueryText: string,
+  eventTimeRange: EventTimeRange,
 ): Promise<AppData> {
   const [overview, detections, events, sourceCapability, runtimeStatus] =
     await Promise.all([
@@ -284,7 +389,13 @@ async function fetchDashboardData(
         buildListUrl("/api/detections", queuePageSize, queueOffset),
       ),
       fetchJson<EventList>(
-        buildListUrl("/api/events", eventsPageSize, eventsOffset),
+        buildEventsUrl(
+          eventsPageSize,
+          eventsCursor,
+          eventFilters,
+          eventQueryText,
+          eventTimeRange,
+        ),
       ),
       fetchJson<SourceCapabilityMatrix>("/api/source-capability"),
       fetchJson<RuntimeStatus>("/api/runtime-status"),
@@ -460,6 +571,120 @@ function badgeToneForSeverity(severity: string): BadgeTone {
   return "neutral";
 }
 
+function severityRank(severity: string): number {
+  if (severity === "high") {
+    return 3;
+  }
+  if (severity === "medium") {
+    return 2;
+  }
+  return 1;
+}
+
+function detectionPrincipalKey(detection: Detection): string {
+  return detection.related_entity_ids[0] ?? "unknown-principal";
+}
+
+function detectionPrimarySource(detection: Detection): string {
+  return detection.evidence[0]?.source ?? "unknown";
+}
+
+function detectionFilterValueLabel(value: string): string {
+  return value === "open" || value === "acknowledged"
+    ? formatTokenLabel(value)
+    : value;
+}
+
+function isFilterActive(values: string[]): boolean {
+  return !values.includes(allFilterKey);
+}
+
+function matchesDetectionFilter(values: string[], candidate: string): boolean {
+  return !isFilterActive(values) || values.includes(candidate);
+}
+
+function toggleDetectionFilterValue(values: string[], value: string): string[] {
+  if (value === allFilterKey) {
+    return [allFilterKey];
+  }
+  const next = new Set(values.filter((item) => item !== allFilterKey));
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next.size === 0 ? [allFilterKey] : Array.from(next);
+}
+
+function compareDetections(
+  left: Detection,
+  right: Detection,
+  sortMode: DetectionSortMode,
+): number {
+  const signalComparison =
+    severityRank(right.severity) - severityRank(left.severity) ||
+    right.score - left.score ||
+    right.confidence - left.confidence ||
+    left.title.localeCompare(right.title);
+
+  if (sortMode === "highest_signal") {
+    return signalComparison;
+  }
+
+  if (sortMode === "principal_story") {
+    return (
+      detectionPrincipalKey(left).localeCompare(detectionPrincipalKey(right)) ||
+      signalComparison
+    );
+  }
+
+  return left.scenario.localeCompare(right.scenario) || signalComparison;
+}
+
+function buildDetectionGroups(
+  detections: Detection[],
+  groupMode: DetectionGroupMode,
+  sortMode: DetectionSortMode,
+): DetectionGroup[] {
+  if (groupMode === "none") {
+    return [
+      {
+        key: "all",
+        title: "Queue",
+        items: [...detections].sort((left, right) =>
+          compareDetections(left, right, sortMode),
+        ),
+      },
+    ];
+  }
+
+  const groups = new Map<string, Detection[]>();
+  for (const detection of detections) {
+    const key =
+      groupMode === "principal"
+        ? detectionPrincipalKey(detection)
+        : detection.scenario;
+    groups.set(key, [...(groups.get(key) ?? []), detection]);
+  }
+
+  return Array.from(groups.entries())
+    .map(([key, items]) => ({
+      key,
+      title: groupMode === "principal" ? key : formatTokenLabel(key),
+      items: items.sort((left, right) =>
+        compareDetections(left, right, sortMode),
+      ),
+    }))
+    .sort((left, right) => {
+      const leftTop = left.items[0];
+      const rightTop = right.items[0];
+      if (!leftTop || !rightTop) {
+        return left.title.localeCompare(right.title);
+      }
+      return compareDetections(leftTop, rightTop, sortMode);
+    });
+}
+
 function pageMeta(page: Page, counts: Counts): PageMeta {
   if (page === "detections") {
     return {
@@ -478,6 +703,13 @@ function pageMeta(page: Page, counts: Counts): PageMeta {
       title: "Integrations",
       count: counts.integrations,
       countLabel: "need attention",
+    };
+  }
+  if (page === "pipeline") {
+    return {
+      title: "Pipeline",
+      count: counts.pipeline,
+      countLabel: "signals",
     };
   }
   return {
@@ -1058,6 +1290,324 @@ interface EventDensityToggleProps {
   onChange: (density: EventDensity) => void;
 }
 
+interface EventFiltersMenuProps {
+  filters: EventFilters;
+  sourceOptions: string[];
+  actionCategoryOptions: string[];
+  sensitivityOptions: string[];
+  onChange: (filters: EventFilters) => void;
+}
+
+interface EventTimeRangeMenuProps {
+  value: EventTimeRange;
+  onChange: (value: EventTimeRange) => void;
+}
+
+interface DetectionFiltersMenuProps {
+  filters: DetectionFilters;
+  severityOptions: string[];
+  statusOptions: string[];
+  sourceOptions: string[];
+  scenarioOptions: string[];
+  principalOptions: string[];
+  onChange: (filters: DetectionFilters) => void;
+}
+
+function activeFilterCount(filters: DetectionFilters): number {
+  return [
+    filters.severities,
+    filters.statuses,
+    filters.sources,
+    filters.scenarios,
+    filters.principals,
+  ].filter(isFilterActive).length;
+}
+
+function EventFiltersMenu({
+  filters,
+  sourceOptions,
+  actionCategoryOptions,
+  sensitivityOptions,
+  onChange,
+}: EventFiltersMenuProps) {
+  function updateFilter(key: keyof EventFilters, value: string) {
+    onChange({
+      ...filters,
+      [key]: toggleDetectionFilterValue(filters[key], value),
+    });
+  }
+
+  function renderOptions(
+    label: string,
+    key: keyof EventFilters,
+    options: string[],
+    formatLabel: (value: string) => string = detectionFilterValueLabel,
+  ) {
+    return (
+      <div className="toolbar-menu__section">
+        <span className="toolbar-menu__label">{label}</span>
+        <div className="toolbar-menu__options">
+          <label className="toolbar-menu__option" key={`${key}-all`}>
+            <input
+              checked={!isFilterActive(filters[key])}
+              onChange={() => updateFilter(key, allFilterKey)}
+              type="checkbox"
+            />
+            <span>All</span>
+          </label>
+          {options.map((option) => (
+            <label className="toolbar-menu__option" key={`${key}-${option}`}>
+              <input
+                checked={matchesDetectionFilter(filters[key], option)}
+                onChange={() => updateFilter(key, option)}
+                type="checkbox"
+              />
+              <span>{formatLabel(option)}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const activeCount = [
+    filters.sources,
+    filters.actionCategories,
+    filters.sensitivities,
+  ].filter(isFilterActive).length;
+
+  return (
+    <details className="toolbar-menu">
+      <summary className="toolbar-menu__summary toolbar-button">
+        Filters
+        <span className="toolbar-menu__summary-count">
+          {formatNumber(activeCount)}
+        </span>
+      </summary>
+      <div className="toolbar-menu__panel toolbar-menu__panel--wide">
+        {renderOptions("Source", "sources", sourceOptions, formatSourceName)}
+        {renderOptions(
+          "Action",
+          "actionCategories",
+          actionCategoryOptions,
+          formatTokenLabel,
+        )}
+        {renderOptions(
+          "Sensitivity",
+          "sensitivities",
+          sensitivityOptions,
+          formatTokenLabel,
+        )}
+      </div>
+    </details>
+  );
+}
+
+const eventTimeRangeOptions: Array<{
+  id: EventTimeRange;
+  label: string;
+}> = [
+  { id: "24h", label: "24h" },
+  { id: "7d", label: "7d" },
+  { id: "30d", label: "30d" },
+  { id: "all", label: "All" },
+];
+
+function EventTimeRangeMenu({ value, onChange }: EventTimeRangeMenuProps) {
+  return (
+    <details className="toolbar-menu">
+      <summary className="toolbar-menu__summary toolbar-button">
+        Window
+        <span className="toolbar-menu__summary-count">
+          {eventTimeRangeOptions.find((option) => option.id === value)?.label}
+        </span>
+      </summary>
+      <div className="toolbar-menu__panel">
+        <div className="toolbar-menu__section">
+          <span className="toolbar-menu__label">Time range</span>
+          <div className="toolbar-menu__presets">
+            {eventTimeRangeOptions.map((option) => (
+              <button
+                className={
+                  value === option.id
+                    ? "toolbar-chip toolbar-chip--selected"
+                    : "toolbar-chip"
+                }
+                key={option.id}
+                onClick={() => onChange(option.id)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function DetectionFiltersMenu({
+  filters,
+  severityOptions,
+  statusOptions,
+  sourceOptions,
+  scenarioOptions,
+  principalOptions,
+  onChange,
+}: DetectionFiltersMenuProps) {
+  function updateFilter(key: keyof DetectionFilters, value: string) {
+    onChange({
+      ...filters,
+      [key]: toggleDetectionFilterValue(filters[key], value),
+    });
+  }
+
+  function renderOptions(
+    label: string,
+    key: keyof DetectionFilters,
+    options: string[],
+    formatLabel: (value: string) => string = detectionFilterValueLabel,
+  ) {
+    return (
+      <div className="toolbar-menu__section">
+        <span className="toolbar-menu__label">{label}</span>
+        <div className="toolbar-menu__options">
+          <label className="toolbar-menu__option" key={`${key}-all`}>
+            <input
+              checked={!isFilterActive(filters[key])}
+              onChange={() => updateFilter(key, allFilterKey)}
+              type="checkbox"
+            />
+            <span>All</span>
+          </label>
+          {options.map((option) => (
+            <label className="toolbar-menu__option" key={`${key}-${option}`}>
+              <input
+                checked={matchesDetectionFilter(filters[key], option)}
+                onChange={() => updateFilter(key, option)}
+                type="checkbox"
+              />
+              <span>{formatLabel(option)}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <details className="toolbar-menu">
+      <summary className="toolbar-menu__summary toolbar-button">
+        Filters
+        <span className="toolbar-menu__summary-count">
+          {formatNumber(activeFilterCount(filters))}
+        </span>
+      </summary>
+      <div className="toolbar-menu__panel toolbar-menu__panel--wide">
+        {renderOptions(
+          "Severity",
+          "severities",
+          severityOptions,
+          formatTokenLabel,
+        )}
+        {renderOptions("Status", "statuses", statusOptions, formatTokenLabel)}
+        {renderOptions("Source", "sources", sourceOptions, formatSourceName)}
+        {renderOptions(
+          "Scenario",
+          "scenarios",
+          scenarioOptions,
+          formatTokenLabel,
+        )}
+        {renderOptions("Principal", "principals", principalOptions)}
+      </div>
+    </details>
+  );
+}
+
+interface DetectionSortMenuProps {
+  groupMode: DetectionGroupMode;
+  sortMode: DetectionSortMode;
+  onGroupChange: (mode: DetectionGroupMode) => void;
+  onSortChange: (mode: DetectionSortMode) => void;
+}
+
+const detectionGroupOptions: Array<{
+  id: DetectionGroupMode;
+  label: string;
+}> = [
+  { id: "none", label: "No groups" },
+  { id: "principal", label: "By principal" },
+  { id: "scenario", label: "By scenario" },
+];
+
+const detectionSortOptions: Array<{
+  id: DetectionSortMode;
+  label: string;
+}> = [
+  { id: "highest_signal", label: "Highest signal" },
+  { id: "principal_story", label: "Principal story" },
+  { id: "scenario_story", label: "Scenario story" },
+];
+
+function DetectionSortMenu({
+  groupMode,
+  sortMode,
+  onGroupChange,
+  onSortChange,
+}: DetectionSortMenuProps) {
+  return (
+    <details className="toolbar-menu">
+      <summary className="toolbar-menu__summary toolbar-button">
+        Triage
+        <span className="toolbar-menu__summary-count">
+          {detectionSortOptions.find((option) => option.id === sortMode)?.label}
+        </span>
+      </summary>
+      <div className="toolbar-menu__panel">
+        <div className="toolbar-menu__section">
+          <span className="toolbar-menu__label">Sort</span>
+          <div className="toolbar-menu__presets">
+            {detectionSortOptions.map((option) => (
+              <button
+                className={
+                  sortMode === option.id
+                    ? "toolbar-chip toolbar-chip--selected"
+                    : "toolbar-chip"
+                }
+                key={option.id}
+                onClick={() => onSortChange(option.id)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="toolbar-menu__section">
+          <span className="toolbar-menu__label">Group</span>
+          <div className="toolbar-menu__presets">
+            {detectionGroupOptions.map((option) => (
+              <button
+                className={
+                  groupMode === option.id
+                    ? "toolbar-chip toolbar-chip--selected"
+                    : "toolbar-chip"
+                }
+                key={option.id}
+                onClick={() => onGroupChange(option.id)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function EventDensityToggle({ density, onChange }: EventDensityToggleProps) {
   return (
     <button
@@ -1507,6 +2057,7 @@ function DetailPane({
   selectedItem,
   detailBusy,
   onAcknowledgeDetection,
+  openEntityPage,
   openEventPage,
 }: DetailPaneProps) {
   const titleHref = selectedItem
@@ -1539,6 +2090,7 @@ function DetailPane({
           formatObservedAt={formatObservedAt}
           formatSourceName={formatSourceName}
           onAcknowledge={() => onAcknowledgeDetection(selectedItem.id)}
+          openEntityPage={openEntityPage}
           openEventPage={openEventPage}
           stackSummaryCards
         />
@@ -1547,6 +2099,7 @@ function DetailPane({
           event={selectedItem.data}
           formatObservedAt={formatObservedAt}
           formatSourceName={formatSourceName}
+          openEntityPage={openEntityPage}
         />
       )}
     </Section>
@@ -1602,7 +2155,8 @@ export function App() {
       : parseRouteFromHash(window.location.hash);
   const [route, setRoute] = useState<Route>(initialRoute);
   const [queueOffset, setQueueOffset] = useState(0);
-  const [eventsOffset, setEventsOffset] = useState(0);
+  const [eventCursor, setEventCursor] = useState<string | null>(null);
+  const [eventCursorHistory, setEventCursorHistory] = useState<string[]>([]);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [detections, setDetections] = useState<DetectionList>({
     items: [],
@@ -1610,7 +2164,15 @@ export function App() {
   });
   const [events, setEvents] = useState<EventList>({
     items: [],
-    page: emptyPagination,
+    page: emptyEventPage,
+    freshness: {
+      query_backend: "quickwit",
+      canonical_store: "iceberg_planned_normalized_lake",
+      canonical_format: "parquet_manifest_bridge",
+      status: "current",
+      detail: null,
+      watermark_at: null,
+    },
   });
   const [sourceCapability, setSourceCapability] =
     useState<SourceCapabilityMatrix | null>(null);
@@ -1618,12 +2180,25 @@ export function App() {
     null,
   );
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
+  const [selectedEntity, setSelectedEntity] = useState<SelectedEntity | null>(
+    null,
+  );
   const [selectedIntegrationSource, setSelectedIntegrationSource] = useState<
     string | null
   >(null);
   const [detectionSearch, setDetectionSearch] = useState("");
   const [eventSearch, setEventSearch] = useState("");
+  const [eventTimeRange, setEventTimeRange] = useState<EventTimeRange>("7d");
   const [integrationSearch, setIntegrationSearch] = useState("");
+  const [eventFilters, setEventFilters] =
+    useState<EventFilters>(defaultEventFilters);
+  const [detectionFilters, setDetectionFilters] = useState<DetectionFilters>(
+    defaultDetectionFilters,
+  );
+  const [detectionGroupMode, setDetectionGroupMode] =
+    useState<DetectionGroupMode>("none");
+  const [detectionSortMode, setDetectionSortMode] =
+    useState<DetectionSortMode>("highest_signal");
   const [eventVisibleColumns, setEventVisibleColumns] = useState<
     EventColumnKey[]
   >(readStoredEventColumns);
@@ -1632,12 +2207,6 @@ export function App() {
   );
   const [eventSort, setEventSort] =
     useState<EventSortState>(readStoredEventSort);
-  const [detectionDensity, setDetectionDensity] = useState<EventDensity>(() =>
-    readStoredDensity(detectionListDensityStorageKey),
-  );
-  const [integrationDensity, setIntegrationDensity] = useState<EventDensity>(
-    () => readStoredDensity(integrationListDensityStorageKey),
-  );
   const [navPaneWidth, setNavPaneWidth] = useState(readStoredNavPaneWidth);
   const [navPaneCollapsed, setNavPaneCollapsed] = useState(
     readStoredNavPaneCollapsed,
@@ -1646,7 +2215,9 @@ export function App() {
     readStoredSplitPaneWidth,
   );
   const [detailBusy, setDetailBusy] = useState(
-    initialRoute.kind === "detection" || initialRoute.kind === "event",
+    initialRoute.kind === "detection" ||
+      initialRoute.kind === "entity" ||
+      initialRoute.kind === "event",
   );
   const [acknowledgingDetectionId, setAcknowledgingDetectionId] = useState<
     string | null
@@ -1656,7 +2227,13 @@ export function App() {
 
   async function refreshDashboard() {
     try {
-      const data = await fetchDashboardData(queueOffset, eventsOffset);
+      const data = await fetchDashboardData(
+        queueOffset,
+        eventCursor,
+        eventFilters,
+        eventSearch,
+        eventTimeRange,
+      );
       applyDashboardData(data, {
         setOverview,
         setDetections,
@@ -1673,7 +2250,13 @@ export function App() {
   useEffect(() => {
     async function pollDashboard() {
       try {
-        const data = await fetchDashboardData(queueOffset, eventsOffset);
+        const data = await fetchDashboardData(
+          queueOffset,
+          eventCursor,
+          eventFilters,
+          eventSearch,
+          eventTimeRange,
+        );
         applyDashboardData(data, {
           setOverview,
           setDetections,
@@ -1692,7 +2275,7 @@ export function App() {
       void pollDashboard();
     }, pollIntervalMs);
     return () => window.clearInterval(timer);
-  }, [eventsOffset, queueOffset]);
+  }, [eventCursor, eventFilters, eventSearch, eventTimeRange, queueOffset]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -1710,6 +2293,9 @@ export function App() {
   const handleDetectionRoute = useEffectEvent((detectionId: string) => {
     void selectDetection(detectionId);
   });
+  const handleEntityRoute = useEffectEvent((principalKey: string) => {
+    void selectEntity(principalKey);
+  });
   const handleEventRoute = useEffectEvent((eventId: string) => {
     void selectEvent(eventId);
   });
@@ -1717,6 +2303,10 @@ export function App() {
   useEffect(() => {
     if (route.kind === "detection") {
       handleDetectionRoute(route.detectionId);
+      return;
+    }
+    if (route.kind === "entity") {
+      handleEntityRoute(route.principalKey);
       return;
     }
     if (route.kind !== "event") {
@@ -1759,47 +2349,94 @@ export function App() {
   }, [eventSort]);
 
   useEffect(() => {
-    window.localStorage.setItem(
-      detectionListDensityStorageKey,
-      detectionDensity,
-    );
-  }, [detectionDensity]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      integrationListDensityStorageKey,
-      integrationDensity,
-    );
-  }, [integrationDensity]);
+    setEventCursor(null);
+    setEventCursorHistory([]);
+  }, [eventFilters, eventSearch, eventTimeRange]);
 
   const deferredDetectionSearch = useDeferredValue(detectionSearch.trim());
+  const detectionSeverityOptions = Array.from(
+    new Set(detections.items.map((detection) => detection.severity)),
+  ).sort();
+  const detectionStatusOptions = Array.from(
+    new Set(detections.items.map((detection) => detection.status)),
+  ).sort();
+  const detectionSourceOptions = Array.from(
+    new Set(detections.items.map(detectionPrimarySource)),
+  ).sort();
+  const detectionScenarioOptions = Array.from(
+    new Set(detections.items.map((detection) => detection.scenario)),
+  ).sort();
+  const detectionPrincipalOptions = Array.from(
+    new Set(detections.items.map(detectionPrincipalKey)),
+  ).sort();
   const filteredDetections = detections.items.filter((detection) => {
     if (deferredDetectionSearch.length === 0) {
-      return true;
+      return (
+        matchesDetectionFilter(
+          detectionFilters.severities,
+          detection.severity,
+        ) &&
+        matchesDetectionFilter(detectionFilters.statuses, detection.status) &&
+        matchesDetectionFilter(
+          detectionFilters.sources,
+          detectionPrimarySource(detection),
+        ) &&
+        matchesDetectionFilter(
+          detectionFilters.scenarios,
+          detection.scenario,
+        ) &&
+        matchesDetectionFilter(
+          detectionFilters.principals,
+          detectionPrincipalKey(detection),
+        )
+      );
     }
     const query = deferredDetectionSearch.toLowerCase();
-    return (
+    const matchesSearch =
       detection.title.toLowerCase().includes(query) ||
       detection.scenario.toLowerCase().includes(query) ||
-      detection.reasons.some((reason) => reason.toLowerCase().includes(query))
-    );
-  });
-
-  const deferredEventSearch = useDeferredValue(eventSearch.trim());
-  const filteredEvents = events.items.filter((event) => {
-    if (deferredEventSearch.length === 0) {
-      return true;
-    }
-    const query = deferredEventSearch.toLowerCase();
+      detection.reasons.some((reason) =>
+        reason.toLowerCase().includes(query),
+      ) ||
+      detectionPrincipalKey(detection).toLowerCase().includes(query) ||
+      formatSourceName(detectionPrimarySource(detection))
+        .toLowerCase()
+        .includes(query);
     return (
-      event.principal.display_name.toLowerCase().includes(query) ||
-      event.resource.name.toLowerCase().includes(query) ||
-      event.action.verb.toLowerCase().includes(query) ||
-      event.action.category.toLowerCase().includes(query) ||
-      formatSourceName(event.source).toLowerCase().includes(query)
+      matchesSearch &&
+      matchesDetectionFilter(detectionFilters.severities, detection.severity) &&
+      matchesDetectionFilter(detectionFilters.statuses, detection.status) &&
+      matchesDetectionFilter(
+        detectionFilters.sources,
+        detectionPrimarySource(detection),
+      ) &&
+      matchesDetectionFilter(detectionFilters.scenarios, detection.scenario) &&
+      matchesDetectionFilter(
+        detectionFilters.principals,
+        detectionPrincipalKey(detection),
+      )
     );
   });
-  const sortedFilteredEvents = [...filteredEvents].sort((left, right) =>
+  const groupedDetections = buildDetectionGroups(
+    filteredDetections,
+    detectionGroupMode,
+    detectionSortMode,
+  );
+
+  const eventSourceOptions = Array.from(
+    new Set([
+      ...Object.keys(sourceCapability?.sources ?? {}),
+      ...events.items.map((event) => event.source),
+    ]),
+  ).sort();
+  const eventActionCategoryOptions = Array.from(
+    new Set(events.items.map((event) => event.action.category)),
+  ).sort();
+  const eventSensitivityOptions = Array.from(
+    new Set(events.items.map((event) => event.resource.sensitivity)),
+  ).sort();
+  const filteredEvents = events.items;
+  const sortedFilteredEvents = [...events.items].sort((left, right) =>
     compareEvents(left, right, eventSort),
   );
 
@@ -1864,6 +2501,11 @@ export function App() {
     navigateToRoute({ kind: "event", eventId });
   }
 
+  function openEntityPage(principalKey: string) {
+    setDetailBusy(true);
+    navigateToRoute({ kind: "entity", principalKey });
+  }
+
   function openDetectionPage(detectionId: string) {
     setDetailBusy(true);
     navigateToRoute({ kind: "detection", detectionId });
@@ -1893,6 +2535,21 @@ export function App() {
     try {
       const detail = await fetchJson<EventDetail>(`/api/events/${eventId}`);
       setSelectedItem({ type: "event", id: eventId, data: detail });
+      setError("");
+    } catch (detailError) {
+      setError(getErrorMessage(detailError));
+    } finally {
+      setDetailBusy(false);
+    }
+  }
+
+  async function selectEntity(principalKey: string) {
+    setDetailBusy(true);
+    try {
+      const detail = await fetchJson<EntityDetail>(
+        `/api/entities/${encodeURIComponent(principalKey)}`,
+      );
+      setSelectedEntity({ id: principalKey, data: detail });
       setError("");
     } catch (detailError) {
       setError(getErrorMessage(detailError));
@@ -1936,15 +2593,23 @@ export function App() {
     integrations: integrationEntries.filter(
       (entry) => integrationStatus(entry.details).tone !== "positive",
     ).length,
+    pipeline:
+      (runtimeStatus?.intake.pending_batch_count ?? 0) +
+      (runtimeStatus?.quickwit.last_sync_status === "failed" ? 1 : 0) +
+      (runtimeStatus?.worker_control.source_stats_refresh_requested ? 1 : 0) +
+      (runtimeStatus?.event_index.available === false ? 1 : 0) +
+      (runtimeStatus?.scoring_input.ready === false ? 1 : 0),
   };
   const currentPageTitle =
     route.kind === "detection"
       ? `Detection - ${route.detectionId}`
-      : route.kind === "event"
-        ? `Event - ${route.eventId}`
-        : route.kind === "integration"
-          ? `Integration - ${route.source}`
-          : pageMeta(page, counts).title;
+      : route.kind === "entity"
+        ? `Principal - ${route.principalKey}`
+        : route.kind === "event"
+          ? `Event - ${route.eventId}`
+          : route.kind === "integration"
+            ? `Integration - ${route.source}`
+            : pageMeta(page, counts).title;
   const navItems = [
     {
       page: "detections" as const,
@@ -1961,6 +2626,11 @@ export function App() {
       label: "Integrations",
       count: counts.integrations,
     },
+    {
+      page: "pipeline" as const,
+      label: "Pipeline",
+      count: counts.pipeline,
+    },
   ];
   const selectedDetection =
     route.kind === "detection" &&
@@ -1973,6 +2643,10 @@ export function App() {
     selectedItem?.type === "event" &&
     selectedItem.id === route.eventId
       ? selectedItem.data
+      : null;
+  const routeEntity =
+    route.kind === "entity" && selectedEntity?.id === route.principalKey
+      ? selectedEntity.data
       : null;
 
   return (
@@ -2018,6 +2692,7 @@ export function App() {
                         selectedDetection.detection.detection_id,
                       )
                     }
+                    openEntityPage={openEntityPage}
                     openEventPage={openEventPage}
                   />
                 ) : (
@@ -2041,11 +2716,36 @@ export function App() {
                     event={selectedEvent}
                     formatObservedAt={formatObservedAt}
                     formatSourceName={formatSourceName}
+                    openEntityPage={openEntityPage}
                   />
                 ) : (
                   <EmptyState
                     title="Event unavailable"
                     body={`No event detail is available for ${route.eventId}.`}
+                  />
+                )}
+              </RecordPage>
+            ) : null}
+
+            {route.kind === "entity" ? (
+              <RecordPage>
+                {detailBusy ? (
+                  <EmptyState
+                    title="Loading detail…"
+                    body="Fetching the requested principal."
+                  />
+                ) : routeEntity ? (
+                  <EntityDetailContent
+                    detail={routeEntity}
+                    formatNumber={formatNumber}
+                    formatObservedAt={formatObservedAt}
+                    formatSourceName={formatSourceName}
+                    openEventPage={openEventPage}
+                  />
+                ) : (
+                  <EmptyState
+                    title="Principal unavailable"
+                    body={`No principal detail is available for ${route.principalKey}.`}
                   />
                 )}
               </RecordPage>
@@ -2107,134 +2807,176 @@ export function App() {
                     }}
                     onSearchChange={setDetectionSearch}
                     resultCount={filteredDetections.length}
-                    searchPlaceholder="Search detections"
+                    searchPlaceholder="Search detections, principals, or scenarios"
                     searchValue={detectionSearch}
                     toolbarActions={
-                      <EventDensityToggle
-                        density={detectionDensity}
-                        onChange={setDetectionDensity}
-                      />
+                      <>
+                        <DetectionFiltersMenu
+                          filters={detectionFilters}
+                          onChange={setDetectionFilters}
+                          principalOptions={detectionPrincipalOptions}
+                          scenarioOptions={detectionScenarioOptions}
+                          severityOptions={detectionSeverityOptions}
+                          sourceOptions={detectionSourceOptions}
+                          statusOptions={detectionStatusOptions}
+                        />
+                        <DetectionSortMenu
+                          groupMode={detectionGroupMode}
+                          onGroupChange={setDetectionGroupMode}
+                          onSortChange={setDetectionSortMode}
+                          sortMode={detectionSortMode}
+                        />
+                      </>
                     }
                     tone="priority"
                   >
                     <div className="list-stack">
-                      {filteredDetections.map((detection) => (
-                        <article
-                          className={
-                            selectedItem?.type === "detection" &&
-                            selectedItem.id === detection.detection_id
-                              ? detectionDensity === "compact"
-                                ? "record-card record-card--interactive record-card--selected record-card--compact"
-                                : "record-card record-card--interactive record-card--selected"
-                              : detectionDensity === "compact"
-                                ? "record-card record-card--interactive record-card--compact"
-                                : "record-card record-card--interactive"
-                          }
-                          key={detection.detection_id}
-                        >
-                          <button
-                            className="record-card__surface"
-                            onClick={() =>
-                              selectDetection(detection.detection_id)
-                            }
-                            type="button"
-                          >
-                            <div className="record-card__header">
-                              <div>
-                                <h3>{detection.title}</h3>
-                                <p>{detection.scenario}</p>
+                      {groupedDetections.map((group) => (
+                        <div className="list-stack" key={group.key}>
+                          {detectionGroupMode !== "none" ? (
+                            <div>
+                              <span className="eyebrow">{group.title}</span>
+                              <div className="panel-note">
+                                {formatNumber(group.items.length)} detection
+                                {group.items.length === 1 ? "" : "s"} in this
+                                triage cluster
                               </div>
-                              <span
-                                className={`badge badge--${badgeToneForSeverity(
-                                  detection.severity,
-                                )}`}
+                            </div>
+                          ) : null}
+                          {group.items.map((detection) => {
+                            const principalKey =
+                              detectionPrincipalKey(detection);
+                            const source = detectionPrimarySource(detection);
+                            return (
+                              <article
+                                className={
+                                  selectedItem?.type === "detection" &&
+                                  selectedItem.id === detection.detection_id
+                                    ? "record-card record-card--interactive record-card--selected"
+                                    : "record-card record-card--interactive"
+                                }
+                                key={detection.detection_id}
                               >
-                                {detection.severity}
-                              </span>
-                            </div>
-                            <div className="record-card__summary">
-                              <div className="record-card__summary-item">
-                                <span>Score</span>
-                                <strong>{detection.score.toFixed(2)}</strong>
-                              </div>
-                              <div className="record-card__summary-item">
-                                <span>Confidence</span>
-                                <strong>
-                                  {detection.confidence.toFixed(2)}
-                                </strong>
-                              </div>
-                              <div className="record-card__summary-item">
-                                <span>Evidence</span>
-                                <strong>
-                                  {formatNumber(detection.evidence.length)}
-                                </strong>
-                              </div>
-                              <div className="record-card__summary-item">
-                                <span>Status</span>
-                                <strong>{detection.status}</strong>
-                              </div>
-                            </div>
-                            <div className="token-row">
-                              <span className="token token--muted">
-                                {detection.scenario}
-                              </span>
-                              {detection.reasons.slice(0, 3).map((reason) => (
-                                <span className="token" key={reason}>
-                                  {reason}
-                                </span>
-                              ))}
-                            </div>
-                          </button>
-                          <div className="list-row-actions">
-                            <a
-                              aria-label={`Open detection ${detection.detection_id} in full page`}
-                              className="list-row-action list-row-action--icon"
-                              href={routeToHref({
-                                kind: "detection",
-                                detectionId: detection.detection_id,
-                              })}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                openDetectionPage(detection.detection_id);
-                              }}
-                              title="Open full page"
-                            >
-                              <svg
-                                aria-hidden="true"
-                                className="list-row-action__icon"
-                                viewBox="0 0 16 16"
-                              >
-                                <path
-                                  d="M6 3h7v7"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="1.5"
-                                />
-                                <path
-                                  d="M13 3L7 9"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="1.5"
-                                />
-                                <path
-                                  d="M11 8v4H3V4h4"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="1.5"
-                                />
-                              </svg>
-                              <span className="visually-hidden">
-                                Open full page
-                              </span>
-                            </a>
-                          </div>
-                        </article>
+                                <button
+                                  className="record-card__surface"
+                                  onClick={() =>
+                                    selectDetection(detection.detection_id)
+                                  }
+                                  type="button"
+                                >
+                                  <div className="record-card__header">
+                                    <div>
+                                      <h3>{detection.title}</h3>
+                                      <p>{principalKey}</p>
+                                    </div>
+                                    <span
+                                      className={`badge badge--${badgeToneForSeverity(
+                                        detection.severity,
+                                      )}`}
+                                    >
+                                      {detection.severity}
+                                    </span>
+                                  </div>
+                                  <div className="record-card__summary">
+                                    <div className="record-card__summary-item">
+                                      <span>Score</span>
+                                      <strong>
+                                        {detection.score.toFixed(2)}
+                                      </strong>
+                                    </div>
+                                    <div className="record-card__summary-item">
+                                      <span>Confidence</span>
+                                      <strong>
+                                        {detection.confidence.toFixed(2)}
+                                      </strong>
+                                    </div>
+                                    <div className="record-card__summary-item">
+                                      <span>Source</span>
+                                      <strong>
+                                        {formatSourceName(source)}
+                                      </strong>
+                                    </div>
+                                    <div className="record-card__summary-item">
+                                      <span>Status</span>
+                                      <strong>{detection.status}</strong>
+                                    </div>
+                                  </div>
+                                  <p className="integration-list-item__note">
+                                    {detection.reasons[0] ??
+                                      "Review the detection detail for the full evidence chain."}
+                                  </p>
+                                  <div className="token-row">
+                                    <span className="token token--muted">
+                                      {formatTokenLabel(detection.scenario)}
+                                    </span>
+                                    <span className="token token--muted">
+                                      {formatSourceName(source)}
+                                    </span>
+                                    <span className="token token--muted">
+                                      {principalKey}
+                                    </span>
+                                  </div>
+                                </button>
+                                <div className="list-row-actions list-row-actions--spread">
+                                  <button
+                                    className="list-row-action"
+                                    onClick={() => openEntityPage(principalKey)}
+                                    type="button"
+                                  >
+                                    Principal
+                                  </button>
+                                  <a
+                                    aria-label={`Open detection ${detection.detection_id} in full page`}
+                                    className="list-row-action list-row-action--icon"
+                                    href={routeToHref({
+                                      kind: "detection",
+                                      detectionId: detection.detection_id,
+                                    })}
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      openDetectionPage(detection.detection_id);
+                                    }}
+                                    title="Open full page"
+                                  >
+                                    <svg
+                                      aria-hidden="true"
+                                      className="list-row-action__icon"
+                                      viewBox="0 0 16 16"
+                                    >
+                                      <path
+                                        d="M6 3h7v7"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth="1.5"
+                                      />
+                                      <path
+                                        d="M13 3L7 9"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth="1.5"
+                                      />
+                                      <path
+                                        d="M11 8v4H3V4h4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth="1.5"
+                                      />
+                                    </svg>
+                                    <span className="visually-hidden">
+                                      Open full page
+                                    </span>
+                                  </a>
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
                       ))}
                     </div>
                   </MasterListPane>
@@ -2247,6 +2989,7 @@ export function App() {
                     onAcknowledgeDetection={(detectionId) => {
                       void acknowledgeDetection(detectionId);
                     }}
+                    openEntityPage={openEntityPage}
                     openEventPage={openEventPage}
                     selectedItem={selectedItem}
                   />
@@ -2264,24 +3007,59 @@ export function App() {
                       body: "No events available.",
                     }}
                     footer={
-                      <Pager
-                        label="Page"
-                        page={events.page}
-                        onPrevious={() =>
-                          setEventsOffset((current) =>
-                            Math.max(0, current - eventsPageSize),
-                          )
-                        }
-                        onNext={() =>
-                          setEventsOffset((current) => current + eventsPageSize)
-                        }
-                      />
+                      <div className="pager">
+                        <div>
+                          <strong>Cursor window</strong>
+                          <span>
+                            {formatNumber(events.page.returned)} shown
+                            {events.freshness.watermark_at
+                              ? ` · indexed through ${formatObservedAt(events.freshness.watermark_at)}`
+                              : events.freshness.status !== "current" &&
+                                  events.freshness.detail
+                                ? ` · ${events.freshness.detail}`
+                                : ""}
+                          </span>
+                        </div>
+                        <div className="pager__actions">
+                          <button
+                            aria-label="Previous event window"
+                            className="pager__nav-button"
+                            disabled={eventCursorHistory.length === 0}
+                            onClick={() => {
+                              const nextHistory = [...eventCursorHistory];
+                              const previousCursor = nextHistory.pop() ?? null;
+                              setEventCursorHistory(nextHistory);
+                              setEventCursor(previousCursor);
+                            }}
+                            title="Previous event window"
+                          >
+                            ‹
+                          </button>
+                          <button
+                            aria-label="Next event window"
+                            className="pager__nav-button"
+                            disabled={
+                              !events.page.has_more || !events.page.next_cursor
+                            }
+                            onClick={() => {
+                              setEventCursorHistory((current) => [
+                                ...current,
+                                events.page.cursor ?? "",
+                              ]);
+                              setEventCursor(events.page.next_cursor ?? null);
+                            }}
+                            title="Next event window"
+                          >
+                            ›
+                          </button>
+                        </div>
+                      </div>
                     }
                     hasItems={events.items.length > 0}
                     hasResults={filteredEvents.length > 0}
                     noResultsState={{
                       title: "No matches",
-                      body: "Try a different event search.",
+                      body: "Try a different event search or filter.",
                     }}
                     onSearchChange={setEventSearch}
                     resultCount={filteredEvents.length}
@@ -2289,6 +3067,17 @@ export function App() {
                     searchValue={eventSearch}
                     toolbarActions={
                       <>
+                        <EventTimeRangeMenu
+                          onChange={setEventTimeRange}
+                          value={eventTimeRange}
+                        />
+                        <EventFiltersMenu
+                          actionCategoryOptions={eventActionCategoryOptions}
+                          filters={eventFilters}
+                          onChange={setEventFilters}
+                          sensitivityOptions={eventSensitivityOptions}
+                          sourceOptions={eventSourceOptions}
+                        />
                         <EventDensityToggle
                           density={eventDensity}
                           onChange={setEventDensity}
@@ -2357,6 +3146,7 @@ export function App() {
                     onAcknowledgeDetection={(detectionId) => {
                       void acknowledgeDetection(detectionId);
                     }}
+                    openEntityPage={openEntityPage}
                     openEventPage={openEventPage}
                     selectedItem={selectedItem}
                   />
@@ -2383,12 +3173,6 @@ export function App() {
                     resultCount={filteredIntegrationEntries.length}
                     searchPlaceholder="Search integrations"
                     searchValue={integrationSearch}
-                    toolbarActions={
-                      <EventDensityToggle
-                        density={integrationDensity}
-                        onChange={setIntegrationDensity}
-                      />
-                    }
                   >
                     <div className="integration-master-list">
                       {filteredIntegrationEntries.map((entry) => {
@@ -2400,12 +3184,8 @@ export function App() {
                           <article
                             className={
                               entry.source === selectedIntegrationSource
-                                ? integrationDensity === "compact"
-                                  ? "integration-list-item integration-list-item--interactive integration-list-item--selected integration-list-item--compact"
-                                  : "integration-list-item integration-list-item--interactive integration-list-item--selected"
-                                : integrationDensity === "compact"
-                                  ? "integration-list-item integration-list-item--interactive integration-list-item--compact"
-                                  : "integration-list-item integration-list-item--interactive"
+                                ? "integration-list-item integration-list-item--interactive integration-list-item--selected"
+                                : "integration-list-item integration-list-item--interactive"
                             }
                             key={entry.source}
                           >
@@ -2426,12 +3206,12 @@ export function App() {
                                 </span>
                               </div>
                               <div className="token-row">
-                                <span className="token token--muted">
+                                <span className="badge badge--neutral">
                                   {entry.source}
                                 </span>
                                 {entry.details.missing_required_event_types
                                   .length > 0 ? (
-                                  <span className="token token--critical">
+                                  <span className="badge badge--critical">
                                     {formatNumber(
                                       entry.details.missing_required_event_types
                                         .length,
@@ -2441,7 +3221,7 @@ export function App() {
                                 ) : null}
                                 {entry.details.missing_required_fields.length >
                                 0 ? (
-                                  <span className="token token--critical">
+                                  <span className="badge badge--critical">
                                     {formatNumber(
                                       entry.details.missing_required_fields
                                         .length,
@@ -2450,7 +3230,7 @@ export function App() {
                                   </span>
                                 ) : null}
                                 {entry.details.dead_letter_7d_count > 0 ? (
-                                  <span className="token token--critical">
+                                  <span className="badge badge--critical">
                                     {formatNumber(
                                       entry.details.dead_letter_7d_count,
                                     )}{" "}
@@ -2462,7 +3242,7 @@ export function App() {
                                   .length === 0 &&
                                 entry.details.missing_required_fields.length ===
                                   0 ? (
-                                  <span className="token token--positive">
+                                  <span className="badge badge--positive">
                                     No current contract issues
                                   </span>
                                 ) : null}
@@ -2577,6 +3357,18 @@ export function App() {
                 }
                 width={splitPaneWidth}
               />
+            ) : null}
+
+            {route.kind === "page" && page === "pipeline" ? (
+              <div className="record-page">
+                <Section title="Pipeline" tone="priority">
+                  <PipelineStatusContent
+                    formatNumber={formatNumber}
+                    formatObservedAt={formatObservedAt}
+                    runtimeStatus={runtimeStatus}
+                  />
+                </Section>
+              </div>
             ) : null}
           </>
         }

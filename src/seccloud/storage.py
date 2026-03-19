@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,9 +26,17 @@ def format_timestamp(value: datetime) -> str:
 
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.rename(path)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        tmp_path = Path(handle.name)
+    os.replace(tmp_path, path)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -87,6 +96,7 @@ class IntakeIdempotencyConflictError(ValueError):
 
 
 NORMALIZED_SCHEMA_VERSION = "event.v1"
+DETECTION_SCHEMA_VERSION = "detection.v1"
 
 
 def normalized_event_parquet_bytes(
@@ -119,6 +129,43 @@ def normalized_event_parquet_bytes(
     return sink.getvalue().to_pybytes()
 
 
+def detection_parquet_bytes(
+    detection: dict[str, Any],
+    *,
+    tenant_id: str,
+) -> bytes:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    observed_at = (
+        detection.get("evidence", [{}])[0].get("observed_at")
+        if isinstance(detection.get("evidence"), list) and detection.get("evidence")
+        else None
+    )
+    row = {
+        "detection_schema_version": DETECTION_SCHEMA_VERSION,
+        "tenant_id": tenant_id,
+        "detection_id": detection["detection_id"],
+        "observed_at": observed_at or format_timestamp(datetime.now(UTC)),
+        "scenario": detection["scenario"],
+        "title": detection["title"],
+        "score": float(detection["score"]),
+        "confidence": float(detection["confidence"]),
+        "severity": detection["severity"],
+        "status": detection.get("status", "open"),
+        "model_version": detection["model_version"],
+        "primary_event_id": (
+            detection["event_ids"][0]
+            if isinstance(detection.get("event_ids"), list) and detection.get("event_ids")
+            else ""
+        ),
+        "payload_json": json.dumps(detection, sort_keys=True),
+    }
+    sink = pa.BufferOutputStream()
+    pq.write_table(pa.Table.from_pylist([row]), sink)
+    return sink.getvalue().to_pybytes()
+
+
 class Workspace:
     def __init__(
         self,
@@ -138,8 +185,6 @@ class Workspace:
         self.normalized_dir = self.root / "normalized"
         self.manifests_dir = self.root / "manifests"
         self.derived_dir = self.root / "derived"
-        self.detections_dir = self.root / "detections"
-        self.cases_dir = self.root / "cases"
         self.ops_dir = self.root / "ops"
         self.founder_dir = self.root / "founder_artifacts"
         self.models_dir = self.root / "models"
@@ -153,8 +198,6 @@ class Workspace:
             self.normalized_dir,
             self.manifests_dir,
             self.derived_dir,
-            self.detections_dir,
-            self.cases_dir,
             self.ops_dir,
             self.founder_dir,
             self.models_dir,
@@ -185,8 +228,6 @@ class Workspace:
             write_json(
                 self.worker_control_path,
                 {
-                    "projection_refresh_requested": False,
-                    "projection_refresh_requested_at": None,
                     "source_stats_refresh_requested": False,
                     "source_stats_refresh_requested_at": None,
                 },
@@ -199,7 +240,6 @@ class Workspace:
                     "feature_runs": 0,
                     "detection_runs": 0,
                     "source_stats_runs": 0,
-                    "projection_runs": 0,
                     "service_runs": 0,
                     "last_submitted_batch_id": None,
                     "last_processed_batch_id": None,
@@ -207,7 +247,6 @@ class Workspace:
                     "last_feature_at": None,
                     "last_detection_at": None,
                     "last_source_stats_at": None,
-                    "last_projection_at": None,
                     "last_service_at": None,
                     "last_service_status": None,
                 },
@@ -256,8 +295,6 @@ class Workspace:
             self.root / "lake",
             self.manifests_dir,
             self.derived_dir,
-            self.detections_dir,
-            self.cases_dir,
             self.ops_dir,
             self.founder_dir,
             self.models_dir,
@@ -266,7 +303,6 @@ class Workspace:
                 shutil.rmtree(path)
         self.bootstrap()
         self.request_source_stats_refresh()
-        self.request_projection_refresh()
 
     @property
     def ingest_manifest_path(self) -> Path:
@@ -323,6 +359,10 @@ class Workspace:
     @property
     def event_index_path(self) -> Path:
         return self.manifests_dir / "event_index.json"
+
+    @property
+    def quickwit_index_state_path(self) -> Path:
+        return self.manifests_dir / "quickwit_index_state.json"
 
     @property
     def detection_context_path(self) -> Path:
@@ -424,6 +464,36 @@ class Workspace:
                 "department_event_ids": {},
             },
         )
+
+    def load_quickwit_index_state(self) -> dict[str, Any]:
+        defaults = {
+            "state_version": 1,
+            "index_id": None,
+            "last_sync_started_at": None,
+            "last_sync_completed_at": None,
+            "last_sync_duration_ms": None,
+            "last_sync_status": None,
+            "last_sync_error": None,
+            "last_indexed_at": None,
+            "watermark_at": None,
+            "indexed_event_count": 0,
+            "indexed_event_ids": [],
+            "last_result": None,
+        }
+        payload = read_json(self.quickwit_index_state_path, defaults)
+        if not isinstance(payload, dict):
+            return defaults
+        indexed_event_ids = payload.get("indexed_event_ids")
+        if not isinstance(indexed_event_ids, list):
+            indexed_event_ids = []
+        return {
+            **defaults,
+            **payload,
+            "indexed_event_ids": [str(event_id) for event_id in indexed_event_ids if isinstance(event_id, str)],
+        }
+
+    def save_quickwit_index_state(self, payload: dict[str, Any]) -> None:
+        write_json(self.quickwit_index_state_path, payload)
 
     def load_detection_context(self) -> dict[str, Any]:
         return read_json(
@@ -528,7 +598,6 @@ class Workspace:
             "feature_runs": 0,
             "detection_runs": 0,
             "source_stats_runs": 0,
-            "projection_runs": 0,
             "service_runs": 0,
             "last_submitted_batch_id": None,
             "last_processed_batch_id": None,
@@ -536,7 +605,6 @@ class Workspace:
             "last_feature_at": None,
             "last_detection_at": None,
             "last_source_stats_at": None,
-            "last_projection_at": None,
             "last_service_at": None,
             "last_service_status": None,
         }
@@ -550,8 +618,6 @@ class Workspace:
 
     def load_worker_control(self) -> dict[str, Any]:
         defaults = {
-            "projection_refresh_requested": False,
-            "projection_refresh_requested_at": None,
             "source_stats_refresh_requested": False,
             "source_stats_refresh_requested_at": None,
         }
@@ -710,21 +776,6 @@ class Workspace:
             entity_ids[stable_entity_key] = entity_id
             self.save_identity_manifest(manifest)
         return entity_id
-
-    def request_projection_refresh(self, requested_at: str | None = None) -> None:
-        control = self.load_worker_control()
-        control["projection_refresh_requested"] = True
-        control["projection_refresh_requested_at"] = requested_at or format_timestamp(datetime.now(UTC))
-        self.save_worker_control(control)
-
-    def clear_projection_refresh_request(self) -> None:
-        control = self.load_worker_control()
-        control["projection_refresh_requested"] = False
-        control["projection_refresh_requested_at"] = None
-        self.save_worker_control(control)
-
-    def projection_refresh_requested(self) -> bool:
-        return bool(self.load_worker_control().get("projection_refresh_requested", False))
 
     def request_source_stats_refresh(self, requested_at: str | None = None) -> None:
         control = self.load_worker_control()
@@ -1165,6 +1216,41 @@ class Workspace:
         events.sort(key=lambda item: item["observed_at"])
         return events
 
+    def read_normalized_event_by_pointer(
+        self,
+        pointer: dict[str, Any] | None,
+        *,
+        event_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(pointer, dict):
+            return None
+        object_key = pointer.get("object_key")
+        if not isinstance(object_key, str) or not object_key:
+            return None
+        payload = self.object_store.get_bytes(object_key)
+        if payload is None:
+            return None
+
+        import io
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(payload))
+        for row in table.to_pylist():
+            if not isinstance(row, dict):
+                continue
+            payload_json = row.get("payload_json")
+            candidate = row
+            if isinstance(payload_json, str):
+                try:
+                    candidate = json.loads(payload_json)
+                except json.JSONDecodeError:
+                    candidate = row
+            candidate_event_id = candidate.get("event_id")
+            if event_id is None or candidate_event_id == event_id:
+                return candidate
+        return None
+
     def _list_normalized_events_from_lake(self) -> list[dict[str, Any]]:
         import io
 
@@ -1296,8 +1382,88 @@ class Workspace:
     def load_derived_state(self) -> dict[str, Any]:
         return read_json(self.derived_state_path, {})
 
+    def _detection_observed_at(self, detection: dict[str, Any]) -> str:
+        evidence = detection.get("evidence")
+        if isinstance(evidence, list) and evidence:
+            observed_at = evidence[0].get("observed_at")
+            if isinstance(observed_at, str) and observed_at:
+                return observed_at
+        return format_timestamp(datetime.now(UTC))
+
+    def _detection_batch_id(self, detection: dict[str, Any]) -> str:
+        detection_id = str(detection["detection_id"])
+        suffix = detection_id.split("-", 1)[1] if "-" in detection_id else detection_id
+        return f"det_{suffix}"
+
+    def _detection_lake_object_key(self, detection: dict[str, Any]) -> str:
+        observed_at = parse_timestamp(self._detection_observed_at(detection))
+        return (
+            "lake/detections/layout=v1/"
+            f"schema={DETECTION_SCHEMA_VERSION}/{self._tenant_partition()}/dt={observed_at:%Y-%m-%d}/"
+            f"hour={observed_at:%H}/batch={self._detection_batch_id(detection)}/part-00000.parquet"
+        )
+
+    def _detection_lake_manifest_key(self, detection: dict[str, Any]) -> str:
+        observed_at = parse_timestamp(self._detection_observed_at(detection))
+        return (
+            "lake/manifests/layout=v1/type=detection/"
+            f"{self._tenant_partition()}/dt={observed_at:%Y-%m-%d}/hour={observed_at:%H}/"
+            f"batch={self._detection_batch_id(detection)}.json"
+        )
+
     def save_detection(self, detection: dict[str, Any]) -> None:
-        write_json(self.detections_dir / f"{detection['detection_id']}.json", detection)
+        self.ensure_detection_lake_artifacts(detection)
+
+    def ensure_detection_lake_artifacts(self, detection: dict[str, Any]) -> dict[str, Any]:
+        object_key = self._detection_lake_object_key(detection)
+        manifest_key = self._detection_lake_manifest_key(detection)
+        existing_manifest = self.object_store.get_json(manifest_key)
+        if existing_manifest is not None:
+            return existing_manifest
+
+        payload_bytes = detection_parquet_bytes(
+            detection,
+            tenant_id=self.tenant_id,
+        )
+        object_sha256 = sha256_digest(payload_bytes)
+        observed_at = self._detection_observed_at(detection)
+        batch_id = self._detection_batch_id(detection)
+        self.object_store.put_bytes(object_key, payload_bytes, content_type="application/vnd.apache.parquet")
+        manifest_payload = {
+            "manifest_version": 1,
+            "manifest_type": "detection",
+            "layout_version": 1,
+            "manifest_id": f"man_{batch_id.split('_', 1)[1]}",
+            "batch_id": batch_id,
+            "tenant_id": self.tenant_id,
+            "produced_at": format_timestamp(datetime.now(UTC)),
+            "partition": {
+                "dt": parse_timestamp(observed_at).strftime("%Y-%m-%d"),
+                "hour": parse_timestamp(observed_at).strftime("%H"),
+            },
+            "time_bounds": {
+                "min": observed_at,
+                "max": observed_at,
+            },
+            "record_count": 1,
+            "detection_schema_version": DETECTION_SCHEMA_VERSION,
+            "upstream_detection_context_signature": self.load_detection_context().get("input_signature"),
+            "scoring_runtime_mode": "heuristic",
+            "model_version": detection["model_version"],
+            "objects": [
+                {
+                    "object_key": object_key,
+                    "object_format": "parquet",
+                    "sha256": object_sha256,
+                    "size_bytes": len(payload_bytes),
+                    "record_count": 1,
+                    "first_record_ordinal": 0,
+                    "last_record_ordinal": 0,
+                }
+            ],
+        }
+        self.object_store.put_json(manifest_key, manifest_payload)
+        return manifest_payload
 
     def _list_detection_lake_payloads(self) -> list[dict[str, Any]]:
         import pyarrow.parquet as pq
@@ -1326,39 +1492,13 @@ class Workspace:
         return [detections_by_id[key] for key in sorted(detections_by_id)]
 
     def list_detections(self) -> list[dict[str, Any]]:
-        detections_by_id: dict[str, dict[str, Any]] = {
-            detection["detection_id"]: detection
-            for detection in self._list_detection_lake_payloads()
-            if isinstance(detection.get("detection_id"), str)
-        }
-        for path in sorted(self.detections_dir.glob("*.json")):
-            payload = read_json(path)
-            detection_id = payload.get("detection_id") if isinstance(payload, dict) else None
-            if isinstance(detection_id, str) and detection_id:
-                detections_by_id[detection_id] = payload
-        return [detections_by_id[key] for key in sorted(detections_by_id)]
+        return self._list_detection_lake_payloads()
 
     def get_detection(self, detection_id: str) -> dict[str, Any]:
-        json_path = self.detections_dir / f"{detection_id}.json"
-        if json_path.exists():
-            return read_json(json_path)
         for detection in self._list_detection_lake_payloads():
             if detection.get("detection_id") == detection_id:
                 return detection
         return {}
-
-    def save_case(self, case_payload: dict[str, Any]) -> None:
-        write_json(self.cases_dir / f"{case_payload['case_id']}.json", case_payload)
-
-    def list_cases(self) -> list[dict[str, Any]]:
-        cases: list[dict[str, Any]] = []
-        for path in sorted(self.cases_dir.glob("*.json")):
-            cases.append(read_json(path))
-        cases.sort(key=lambda item: item["case_id"])
-        return cases
-
-    def get_case(self, case_id: str) -> dict[str, Any]:
-        return read_json(self.cases_dir / f"{case_id}.json")
 
     def save_ops_metadata(self, payload: dict[str, Any]) -> None:
         write_json(self.ops_dir / "metadata.json", payload)

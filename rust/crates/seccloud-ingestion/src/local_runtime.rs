@@ -46,7 +46,6 @@ pub struct WorkerStateFile {
     pub feature_runs: usize,
     pub detection_runs: usize,
     pub source_stats_runs: usize,
-    pub projection_runs: usize,
     pub service_runs: usize,
     pub last_submitted_batch_id: Option<String>,
     pub last_processed_batch_id: Option<String>,
@@ -54,15 +53,12 @@ pub struct WorkerStateFile {
     pub last_feature_at: Option<String>,
     pub last_detection_at: Option<String>,
     pub last_source_stats_at: Option<String>,
-    pub last_projection_at: Option<String>,
     pub last_service_at: Option<String>,
     pub last_service_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkerControlFile {
-    pub projection_refresh_requested: bool,
-    pub projection_refresh_requested_at: Option<String>,
     pub source_stats_refresh_requested: bool,
     pub source_stats_refresh_requested_at: Option<String>,
 }
@@ -201,13 +197,6 @@ pub fn record_source_stats_run(workspace: &Path) -> anyhow::Result<WorkerStateFi
     })
 }
 
-pub fn record_projection_run(workspace: &Path) -> anyhow::Result<WorkerStateFile> {
-    mutate_worker_state(workspace, |worker_state| {
-        worker_state.projection_runs += 1;
-        worker_state.last_projection_at = Some(now_timestamp());
-    })
-}
-
 pub fn mark_service_started(workspace: &Path) -> anyhow::Result<WorkerStateFile> {
     mutate_worker_state(workspace, |worker_state| {
         worker_state.service_runs += 1;
@@ -243,13 +232,6 @@ pub fn clear_source_stats_refresh_request(workspace: &Path) -> anyhow::Result<()
     let mut control = load_worker_control(workspace)?;
     control.source_stats_refresh_requested = false;
     control.source_stats_refresh_requested_at = None;
-    save_worker_control(workspace, &control)
-}
-
-pub fn clear_projection_refresh_request(workspace: &Path) -> anyhow::Result<()> {
-    let mut control = load_worker_control(workspace)?;
-    control.projection_refresh_requested = false;
-    control.projection_refresh_requested_at = None;
     save_worker_control(workspace, &control)
 }
 
@@ -560,28 +542,6 @@ mod tests {
         let control = load_worker_control(&root).unwrap();
         assert!(!control.source_stats_refresh_requested);
         assert_eq!(control.source_stats_refresh_requested_at, None);
-
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn clear_projection_refresh_request_resets_worker_control_flag() {
-        let root = test_workspace();
-        save_worker_control(
-            &root,
-            &WorkerControlFile {
-                projection_refresh_requested: true,
-                projection_refresh_requested_at: Some("2026-03-15T10:00:00Z".into()),
-                ..WorkerControlFile::default()
-            },
-        )
-        .unwrap();
-
-        clear_projection_refresh_request(&root).unwrap();
-
-        let control = load_worker_control(&root).unwrap();
-        assert!(!control.projection_refresh_requested);
-        assert_eq!(control.projection_refresh_requested_at, None);
 
         std::fs::remove_dir_all(root).unwrap();
     }

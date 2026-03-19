@@ -41,7 +41,7 @@ class PushIngestionTestCase(unittest.TestCase):
         }
         env = {
             "SECCLOUD_WORKSPACE": str(self.workspace.root),
-            "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+            "SECCLOUD_WORKFLOW_DSN": "postgresql://projection",
             "SECCLOUD_PUSH_AUTH_TOKENS": json.dumps(credentials),
         }
         patcher = patch.dict(os.environ, env, clear=False)

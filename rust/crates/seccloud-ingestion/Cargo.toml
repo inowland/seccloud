@@ -37,10 +37,6 @@ name = "seccloud-detection-threshold-sweep"
 path = "src/bin/seccloud-detection-threshold-sweep.rs"
 
 [[bin]]
-name = "seccloud-projector"
-path = "src/bin/seccloud-projector.rs"
-
-[[bin]]
 name = "seccloud-service-once"
 path = "src/bin/seccloud-service-once.rs"
 

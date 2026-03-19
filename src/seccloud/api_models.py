@@ -122,6 +122,14 @@ class Pagination(ApiSchema):
     has_more: bool
 
 
+class EventQueryPage(ApiSchema):
+    limit: int
+    returned: int
+    has_more: bool
+    cursor: str | None = None
+    next_cursor: str | None = None
+
+
 class DetectionPeerComparison(ApiSchema):
     principal_id: str
     peer_group: str
@@ -160,9 +168,37 @@ class DetectionDetail(ApiSchema):
     events: list[Event]
 
 
+class EntityOverview(ApiSchema):
+    latest_observed_at: str | None = None
+    first_observed_at: str | None = None
+    timeline_event_count: int
+    total_event_count: int
+    distinct_source_count: int
+    distinct_sources: list[str]
+    distinct_resource_count: int
+    high_sensitivity_event_count: int
+
+
+class EntityDetail(ApiSchema):
+    principal: Principal
+    overview: EntityOverview
+    peer_comparison: DetectionPeerComparison
+    timeline: list[Event]
+
+
 class EventList(ApiSchema):
     items: list[Event]
-    page: Pagination
+    page: EventQueryPage
+    freshness: EventQueryFreshness
+
+
+class EventQueryFreshness(ApiSchema):
+    query_backend: str
+    canonical_store: str
+    canonical_format: str
+    status: str = "current"
+    detail: str | None = None
+    watermark_at: str | None = None
 
 
 class DetectionList(ApiSchema):
@@ -238,7 +274,6 @@ class WorkerState(ApiSchema):
     feature_runs: int
     detection_runs: int
     source_stats_runs: int
-    projection_runs: int
     service_runs: int
     last_submitted_batch_id: str | None = None
     last_processed_batch_id: str | None = None
@@ -246,7 +281,6 @@ class WorkerState(ApiSchema):
     last_feature_at: str | None = None
     last_detection_at: str | None = None
     last_source_stats_at: str | None = None
-    last_projection_at: str | None = None
     last_service_at: str | None = None
     last_service_status: str | None = None
     pending_batch_count: int
@@ -387,6 +421,42 @@ class EventIndexStatus(ApiSchema):
     input_signature: str | None = None
 
 
+class CanonicalEventStoreStatus(ApiSchema):
+    canonical_store: str
+    canonical_format: str
+    query_backend: str
+    detail_hydration: str
+    cursor_query_support: bool
+    text_query_support: bool
+    time_range_support: bool
+
+
+class QuickwitStatus(ApiSchema):
+    root: str
+    url: str
+    index_id: str
+    config_path: str
+    log_path: str
+    paths: dict[str, str]
+    initialized: bool
+    pid: int | None = None
+    running: bool
+    ready: bool
+    rss_bytes: int | None = None
+    log_size_bytes: int
+    last_start_attempted_at: str | None = None
+    last_start_completed_at: str | None = None
+    last_start_duration_ms: int | None = None
+    last_start_status: str | None = None
+    last_start_error: str | None = None
+    watermark_at: str | None = None
+    indexed_event_count: int
+    last_sync_completed_at: str | None = None
+    last_sync_duration_ms: int | None = None
+    last_sync_status: str | None = None
+    last_sync_error: str | None = None
+
+
 class DetectionContextStatus(ApiSchema):
     available: bool
     event_count: int
@@ -401,20 +471,39 @@ class IdentityProfilesStatus(ApiSchema):
     team_count: int
 
 
-class ProjectionStatus(ApiSchema):
-    available: bool
-    overview: Overview | None = None
-    error: str | None = None
+class WorkerControlStatus(ApiSchema):
+    source_stats_refresh_requested: bool
+    source_stats_refresh_requested_at: str | None = None
+
+
+class IntakeStatus(ApiSchema):
+    pending_batch_count: int
+    processed_batch_count: int
+    submitted_batch_count: int
+    accepted_idempotency_key_count: int
+
+
+class PostgresStatus(ApiSchema):
+    root: str
+    dsn: str | None = None
+    paths: dict[str, str]
+    initialized: bool
 
 
 class RuntimeStatus(ApiSchema):
+    workspace: str
     tenant_id: str
+    stream_state: StreamState
     worker_state: WorkerState
     feature_tables: FeatureTableStatus
     feature_vocab: FeatureVocabStatus
     scoring_input: ScoringInputStatus
     model_runtime: ModelRuntimeStatus
     event_index: EventIndexStatus
+    canonical_event_store: CanonicalEventStoreStatus
+    quickwit: QuickwitStatus
     detection_context: DetectionContextStatus
     identity_profiles: IdentityProfilesStatus
-    projection: ProjectionStatus
+    worker_control: WorkerControlStatus
+    intake: IntakeStatus
+    postgres: PostgresStatus

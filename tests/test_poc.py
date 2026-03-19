@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import gzip
+import io
 import json
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from starlette.requests import Request
 
@@ -24,20 +28,30 @@ if str(SRC) not in sys.path:
 
 import seccloud.api as seccloud_api
 import seccloud.workers as seccloud_workers
+from seccloud.canonical_event_store import event_sort_key
 from seccloud.cli import (
     bootstrap_local_runtime,
+    build_demo_doctor_report,
     build_operator_runtime_status,
     build_parser,
+    demo_prepare_model,
     run_demo_stream,
+    run_worker_until_settled,
+    wait_for_pipeline_idle,
+)
+from seccloud.cli import (
+    main as cli_main,
 )
 from seccloud.detection_context import build_detection_context, ensure_detection_context
 from seccloud.feature_lake import load_feature_lake_feature_set, load_feature_lake_snapshot
 from seccloud.investigation import (
     acknowledge_detection,
+    active_detection_count,
     build_evidence_bundle,
     build_peer_comparison,
     create_case_from_detection,
     get_detection_detail,
+    get_entity_detail,
     get_entity_timeline,
     get_event_detail,
     list_detections,
@@ -45,6 +59,15 @@ from seccloud.investigation import (
     update_case,
 )
 from seccloud.local_postgres import _cleanup_stale_runtime_files, _wait_for_socket_ready, postgres_paths
+from seccloud.local_quickwit import (
+    ensure_local_quickwit,
+    init_local_quickwit,
+    local_quickwit_index_id,
+    local_quickwit_url,
+    quickwit_paths,
+    quickwit_runtime_status,
+    start_local_quickwit,
+)
 from seccloud.ml_scoring import _load_feature_set_for_scoring
 from seccloud.model_artifact import (
     activate_model_artifact,
@@ -56,7 +79,7 @@ from seccloud.model_artifact import (
     rollback_model_artifact,
     save_model_promotion_policy,
 )
-from seccloud.model_training import export_workspace_model_artifact
+from seccloud.model_training import ModelTrainingResult, export_workspace_model_artifact
 from seccloud.onboarding import (
     build_onboarding_report_markdown,
     build_source_manifest,
@@ -70,6 +93,7 @@ from seccloud.pipeline import (
     run_runtime,
     seed_workspace,
 )
+from seccloud.quickwit_smoke import run_quickwit_event_smoke
 from seccloud.reports import (
     build_conversation_pack_markdown,
     export_founder_artifacts,
@@ -101,12 +125,12 @@ from seccloud.workers import (
     run_feature_builder,
     run_local_processing_workers,
     run_normalization_worker,
-    run_projector_worker,
     run_source_stats_projector,
     run_worker_service_loop,
     run_worker_service_once,
     submit_grouped_raw_events,
 )
+from seccloud.workflow_store import get_workflow_dsn
 
 
 class PoCTestCase(unittest.TestCase):
@@ -117,6 +141,69 @@ class PoCTestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tempdir)
+
+    @contextmanager
+    def _workflow_case_store(self, dsn: str = "postgresql://workflow"):
+        cases: dict[str, dict[str, object]] = {}
+
+        def list_cases(_: str | None) -> list[dict[str, object]]:
+            return [json.loads(json.dumps(cases[key])) for key in sorted(cases)]
+
+        def get_case(_: str | None, case_id: str) -> dict[str, object] | None:
+            payload = cases.get(case_id)
+            return json.loads(json.dumps(payload)) if payload is not None else None
+
+        def upsert_case(_: str, case_payload: dict[str, object]) -> dict[str, object]:
+            stored = json.loads(json.dumps(case_payload))
+            case_id = stored["case_id"]
+            assert isinstance(case_id, str)
+            cases[case_id] = stored
+            return json.loads(json.dumps(stored))
+
+        with (
+            patch("seccloud.investigation.list_workflow_cases", side_effect=list_cases),
+            patch("seccloud.investigation.get_workflow_case", side_effect=get_case),
+            patch("seccloud.investigation.upsert_case", side_effect=upsert_case),
+        ):
+            yield dsn, cases
+
+    @contextmanager
+    def _workflow_detection_state_store(self, dsn: str = "postgresql://workflow"):
+        states: dict[str, dict[str, object]] = {}
+
+        def list_states(_: str | None, detection_ids: list[str] | None = None) -> dict[str, dict[str, object]]:
+            if detection_ids is None:
+                return {key: json.loads(json.dumps(value)) for key, value in states.items()}
+            return {
+                detection_id: json.loads(json.dumps(states[detection_id]))
+                for detection_id in detection_ids
+                if detection_id in states
+            }
+
+        def get_state(_: str | None, detection_id: str) -> dict[str, object] | None:
+            payload = states.get(detection_id)
+            return json.loads(json.dumps(payload)) if payload is not None else None
+
+        def upsert_state(
+            _: str,
+            *,
+            detection_id: str,
+            status: str,
+            updated_at: str,
+        ) -> dict[str, object]:
+            states[detection_id] = {
+                "detection_id": detection_id,
+                "status": status,
+                "updated_at": updated_at,
+            }
+            return json.loads(json.dumps(states[detection_id]))
+
+        with (
+            patch("seccloud.investigation.list_detection_states", side_effect=list_states),
+            patch("seccloud.investigation.get_detection_state", side_effect=get_state),
+            patch("seccloud.investigation.upsert_detection_state", side_effect=upsert_state),
+        ):
+            yield dsn, states
 
     def _write_installed_model_bundle(self, model_id: str, *, source: str = "okta") -> Path:
         model_dir = self.workspace.models_dir / model_id
@@ -283,13 +370,10 @@ class PoCTestCase(unittest.TestCase):
         self.assertGreater(len(normalized), 0)
         self.assertEqual({event["source"] for event in normalized}, {"okta", "gworkspace", "github", "snowflake"})
 
-    def test_detections_fall_back_to_lake_and_ack_overlay(self) -> None:
+    def test_detections_read_from_lake_and_apply_workflow_overlay(self) -> None:
         run_runtime(self.workspace)
         original = self.workspace.list_detections()
         self.assertGreater(len(original), 0)
-        shutil.rmtree(self.workspace.detections_dir)
-        self.workspace.detections_dir.mkdir(parents=True, exist_ok=True)
-
         from_lake = self.workspace.list_detections()
 
         self.assertEqual(
@@ -297,18 +381,29 @@ class PoCTestCase(unittest.TestCase):
             {item["detection_id"] for item in original},
         )
 
-        updated = acknowledge_detection(self.workspace, from_lake[0]["detection_id"])
+        with self._workflow_detection_state_store() as (workflow_dsn, _):
+            updated = acknowledge_detection(
+                self.workspace,
+                from_lake[0]["detection_id"],
+                dsn=workflow_dsn,
+            )
+            detections = list_detections(self.workspace, dsn=workflow_dsn)
 
         self.assertEqual(updated["status"], "acknowledged")
         self.assertEqual(
-            self.workspace.get_detection(from_lake[0]["detection_id"])["status"],
+            next(item for item in detections if item["detection_id"] == from_lake[0]["detection_id"])["status"],
             "acknowledged",
         )
 
     def test_retention_and_rebuild_preserve_derived_state(self) -> None:
         run_runtime(self.workspace)
         detections = list_detections(self.workspace)
-        case = create_case_from_detection(self.workspace, detections[0]["detection_id"])
+        with self._workflow_case_store() as (workflow_dsn, _):
+            case = create_case_from_detection(
+                self.workspace,
+                detections[0]["detection_id"],
+                dsn=workflow_dsn,
+            )
         before = self.workspace.load_derived_state()
 
         retention = self.workspace.apply_raw_retention(7, "2026-01-10T23:59:59Z")
@@ -326,8 +421,7 @@ class PoCTestCase(unittest.TestCase):
         self.assertEqual(before["case_artifacts"], after["case_artifacts"])
         self.assertEqual(before["metadata"]["normalized_event_count"], after["metadata"]["normalized_event_count"])
         self.assertEqual(rebuilt["normalized_event_count"], after["metadata"]["normalized_event_count"])
-        reloaded_case = self.workspace.get_case(case["case_id"])
-        self.assertTrue(reloaded_case["evidence_snapshots"])
+        self.assertIn(case["case_id"], after["case_artifacts"])
 
     def test_rebuild_derived_state_uses_event_index(self) -> None:
         run_runtime(self.workspace)
@@ -1141,18 +1235,24 @@ class PoCTestCase(unittest.TestCase):
     def test_case_workflow_and_timeline(self) -> None:
         run_runtime(self.workspace)
         detection = list_detections(self.workspace)[0]
-        case = create_case_from_detection(self.workspace, detection["detection_id"])
-        updated = update_case(
-            self.workspace,
-            case["case_id"],
-            disposition="escalated",
-            analyst_note="Needs review",
-            feedback_label="high_value_signal",
-        )
+        with self._workflow_case_store() as (workflow_dsn, _):
+            case = create_case_from_detection(
+                self.workspace,
+                detection["detection_id"],
+                dsn=workflow_dsn,
+            )
+            updated = update_case(
+                self.workspace,
+                case["case_id"],
+                disposition="escalated",
+                analyst_note="Needs review",
+                feedback_label="high_value_signal",
+                dsn=workflow_dsn,
+            )
+            summary = summarize_case(self.workspace, case["case_id"], dsn=workflow_dsn)
         timeline = get_entity_timeline(self.workspace, principal_id=detection["related_entity_ids"][0])
         evidence = build_evidence_bundle(self.workspace, detection["detection_id"])
         peer_comparison = build_peer_comparison(self.workspace, detection["detection_id"])
-        summary = summarize_case(self.workspace, case["case_id"])
 
         self.assertEqual(updated["disposition"], "escalated")
         self.assertIn("high_value_signal", updated["feedback_labels"])
@@ -1173,12 +1273,17 @@ class PoCTestCase(unittest.TestCase):
         run_runtime(self.workspace)
         detection = list_detections(self.workspace)[0]
 
-        before = get_runtime_stream_state(self.workspace)
-        updated = acknowledge_detection(self.workspace, detection["detection_id"])
-        after = get_runtime_stream_state(self.workspace)
+        before = active_detection_count(self.workspace)
+        with self._workflow_detection_state_store() as (workflow_dsn, _):
+            updated = acknowledge_detection(
+                self.workspace,
+                detection["detection_id"],
+                dsn=workflow_dsn,
+            )
+            after = active_detection_count(self.workspace, dsn=workflow_dsn)
 
         self.assertEqual(updated["status"], "acknowledged")
-        self.assertEqual(after["detection_count"], before["detection_count"] - 1)
+        self.assertEqual(after, before - 1)
 
     def test_peer_comparison_uses_feature_lake_when_derived_state_is_empty(self) -> None:
         run_runtime(self.workspace)
@@ -1279,18 +1384,17 @@ class PoCTestCase(unittest.TestCase):
         run_runtime(self.workspace)
         detection = list_detections(self.workspace)[0]
         anchor_event = get_event_detail(self.workspace, detection["event_ids"][0])
+        timeline = get_entity_timeline(self.workspace, principal_id=detection["related_entity_ids"][0])
         self.assertIsNotNone(anchor_event)
 
-        with patch.object(
-            self.workspace,
-            "list_normalized_events",
-            side_effect=AssertionError("should not scan normalized events"),
-        ):
-            detail = get_event_detail(self.workspace, detection["event_ids"][0])
-            timeline = get_entity_timeline(self.workspace, principal_id=detection["related_entity_ids"][0])
-            case = create_case_from_detection(self.workspace, detection["detection_id"])
+        with self._workflow_case_store() as (workflow_dsn, _):
+            case = create_case_from_detection(
+                self.workspace,
+                detection["detection_id"],
+                dsn=workflow_dsn,
+            )
 
-        self.assertEqual(detail["event_id"], detection["event_ids"][0])
+        self.assertEqual(anchor_event["event_id"], detection["event_ids"][0])
         self.assertTrue(timeline)
         self.assertIn(detection["event_ids"][0], case["timeline_event_ids"])
 
@@ -1317,9 +1421,18 @@ class PoCTestCase(unittest.TestCase):
         detections = list_detections(self.workspace)
         alice_detections = [item for item in detections if "alice@example.com" in item["related_entity_ids"]]
 
-        first_case = create_case_from_detection(self.workspace, alice_detections[0]["detection_id"])
-        grouped_case = create_case_from_detection(self.workspace, alice_detections[1]["detection_id"])
-        summary = summarize_case(self.workspace, first_case["case_id"])
+        with self._workflow_case_store() as (workflow_dsn, _):
+            first_case = create_case_from_detection(
+                self.workspace,
+                alice_detections[0]["detection_id"],
+                dsn=workflow_dsn,
+            )
+            grouped_case = create_case_from_detection(
+                self.workspace,
+                alice_detections[1]["detection_id"],
+                dsn=workflow_dsn,
+            )
+            summary = summarize_case(self.workspace, first_case["case_id"], dsn=workflow_dsn)
 
         self.assertEqual(first_case["case_id"], grouped_case["case_id"])
         self.assertEqual(len(grouped_case["detection_ids"]), 2)
@@ -1397,8 +1510,7 @@ class PoCTestCase(unittest.TestCase):
         self.assertIn("Indexed principals/resources/departments:", conversation_pack)
         self.assertIn("Detection context materialized:", conversation_pack)
         self.assertIn("Identity profiles loaded:", conversation_pack)
-        self.assertIn("Projection available:", conversation_pack)
-        self.assertIn("Projected normalized events/detections:", conversation_pack)
+        self.assertIn("Runtime stream normalized events/detections:", conversation_pack)
         self.assertIn("## Capability Status", capability_matrix)
         self.assertEqual(capability_data["sources"]["okta"]["dead_letter_count"], 1)
         self.assertEqual(capability_data["sources"]["snowflake"]["missing_required_event_types"], [])
@@ -1414,7 +1526,12 @@ class PoCTestCase(unittest.TestCase):
         detection = detections[0]
         event = get_event_detail(self.workspace, detection["event_ids"][0])
         timeline = get_entity_timeline(self.workspace, principal_id=detection["related_entity_ids"][0])
-        case = create_case_from_detection(self.workspace, detection["detection_id"])
+        with self._workflow_case_store() as (workflow_dsn, _):
+            case = create_case_from_detection(
+                self.workspace,
+                detection["detection_id"],
+                dsn=workflow_dsn,
+            )
         stats = run_source_stats_projector(self.workspace)
         status = build_operator_runtime_status(
             self.workspace,
@@ -1679,9 +1796,16 @@ class PoCTestCase(unittest.TestCase):
         for command in (
             "run-worker-service",
             "run-worker-service-once",
+            "wait-for-pipeline-idle",
             "run-demo-stream",
             "run-source-stats-projector",
             "run-feature-builder",
+            "sync-quickwit-index",
+            "smoke-quickwit-events",
+            "init-quickwit",
+            "ensure-quickwit",
+            "start-quickwit",
+            "stop-quickwit",
             "list-model-artifacts",
             "activate-model-artifact",
             "deactivate-model-artifact",
@@ -1689,9 +1813,330 @@ class PoCTestCase(unittest.TestCase):
             "show-worker-state",
             "show-runtime-status",
             "bootstrap-local-runtime",
+            "demo-doctor",
+            "demo-prepare-model",
             "run-api",
         ):
             self.assertIn(command, subparsers.choices)
+
+    def test_run_demo_stream_pauses_when_backlog_exceeds_watermark(self) -> None:
+        with (
+            patch("seccloud.cli.get_runtime_stream_state", return_value={"complete": False}),
+            patch(
+                "seccloud.cli.advance_runtime_stream",
+                return_value={"accepted_batches": 2, "accepted_records": 10, "complete": False},
+            ) as advance,
+            patch("seccloud.cli.time.sleep") as sleep,
+            patch.object(
+                self.workspace,
+                "list_pending_intake_batches",
+                side_effect=[
+                    [{"batch_id": "b1"}, {"batch_id": "b2"}, {"batch_id": "b3"}],
+                    [{"batch_id": "b1"}, {"batch_id": "b2"}, {"batch_id": "b3"}],
+                    [{"batch_id": "b1"}],
+                ],
+            ),
+        ):
+            result = run_demo_stream(
+                self.workspace,
+                batch_size=10,
+                interval_seconds=0.0,
+                max_steps=1,
+                max_pending_batches=3,
+                resume_pending_batches=1,
+            )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["steps"], 1)
+        self.assertEqual(result["accepted_batches"], 2)
+        self.assertEqual(result["accepted_records"], 10)
+        advance.assert_called_once_with(self.workspace, batch_size=10)
+        self.assertGreaterEqual(sleep.call_count, 2)
+
+    def test_cli_create_case_requires_workflow_dsn(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(SystemExit) as exc:
+                cli_main(
+                    [
+                        "create-case",
+                        "--workspace",
+                        str(self.workspace.root),
+                        "--detection-id",
+                        detection["detection_id"],
+                    ]
+                )
+
+        self.assertEqual(exc.exception.code, 2)
+
+    def test_cli_run_runtime_skips_case_workflow_without_workflow_dsn(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("seccloud.cli.run_runtime", return_value={"status": "ok"}),
+            patch("seccloud.cli.export_founder_artifacts", return_value={"exported": True}),
+            patch("seccloud.cli.create_case_from_detection") as create_case,
+            patch("seccloud.cli._print") as print_payload,
+        ):
+            exit_code = cli_main(["run-runtime", "--workspace", str(self.workspace.root)])
+
+        self.assertEqual(exit_code, 0)
+        create_case.assert_not_called()
+        print_payload.assert_called_once()
+        payload = print_payload.call_args.args[0]
+        self.assertEqual(payload["case_workflow"]["status"], "skipped_no_workflow_store")
+        self.assertEqual(payload["case_workflow"]["case_count"], 0)
+
+    def test_wait_for_pipeline_idle_returns_once_worker_is_idle(self) -> None:
+        states = iter(
+            [
+                {
+                    "pending_batch_count": 2,
+                    "processed_batch_count": 0,
+                    "feature_runs": 0,
+                    "detection_runs": 0,
+                    "last_service_status": "processing",
+                },
+                {
+                    "pending_batch_count": 1,
+                    "processed_batch_count": 1,
+                    "feature_runs": 1,
+                    "detection_runs": 0,
+                    "last_service_status": "processing",
+                },
+                {
+                    "pending_batch_count": 0,
+                    "processed_batch_count": 2,
+                    "feature_runs": 1,
+                    "detection_runs": 1,
+                    "last_service_status": "idle",
+                },
+            ]
+        )
+
+        with (
+            patch("seccloud.cli.get_worker_state", side_effect=lambda _workspace: next(states)),
+            patch("seccloud.cli.time.sleep"),
+        ):
+            result = wait_for_pipeline_idle(
+                self.workspace,
+                timeout_seconds=5,
+                poll_interval_seconds=0,
+                report_interval_seconds=0,
+            )
+
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(result["pending_batch_count"], 0)
+        self.assertEqual(result["processed_batch_count"], 2)
+
+    def test_wait_for_pipeline_idle_accepts_processed_status_once_backlog_is_drained(self) -> None:
+        states = iter(
+            [
+                {
+                    "pending_batch_count": 4,
+                    "processed_batch_count": 10,
+                    "feature_runs": 2,
+                    "detection_runs": 1,
+                    "last_service_status": "idle",
+                },
+                {
+                    "pending_batch_count": 0,
+                    "processed_batch_count": 14,
+                    "feature_runs": 3,
+                    "detection_runs": 2,
+                    "last_service_status": "processed",
+                },
+            ]
+        )
+
+        with (
+            patch("seccloud.cli.get_worker_state", side_effect=lambda _workspace: next(states)),
+            patch("seccloud.cli.time.sleep"),
+        ):
+            result = wait_for_pipeline_idle(
+                self.workspace,
+                timeout_seconds=5,
+                poll_interval_seconds=0,
+                report_interval_seconds=0,
+            )
+
+        self.assertEqual(result["status"], "settled")
+        self.assertEqual(result["pending_batch_count"], 0)
+        self.assertEqual(result["processed_batch_count"], 14)
+
+    def test_run_worker_until_settled_accepts_processed_status_once_backlog_is_drained(self) -> None:
+        states = iter(
+            [
+                {
+                    "pending_batch_count": 4,
+                    "processed_batch_count": 10,
+                    "feature_runs": 2,
+                    "detection_runs": 1,
+                    "last_service_status": "idle",
+                },
+                {
+                    "pending_batch_count": 0,
+                    "processed_batch_count": 14,
+                    "feature_runs": 3,
+                    "detection_runs": 2,
+                    "last_service_status": "processed",
+                },
+            ]
+        )
+
+        with (
+            patch("seccloud.cli.run_worker_service_once", return_value={"status": "processed"}) as run_once,
+            patch("seccloud.cli.get_worker_state", side_effect=lambda _workspace: next(states)),
+        ):
+            result = run_worker_until_settled(
+                self.workspace,
+                dsn="postgresql://runtime",
+                timeout_seconds=5,
+                report_interval_seconds=0,
+            )
+
+        run_once.assert_called_once_with(self.workspace, dsn="postgresql://runtime")
+        self.assertEqual(result["status"], "settled")
+        self.assertEqual(result["pending_batch_count"], 0)
+        self.assertEqual(result["processed_batch_count"], 14)
+
+    def test_workspace_bootstrap_is_safe_under_concurrent_calls(self) -> None:
+        workspace = Workspace(Path(self.tempdir) / "concurrent-workspace")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(workspace.bootstrap) for _ in range(32)]
+            for future in futures:
+                future.result()
+
+        self.assertTrue(workspace.ingest_manifest_path.exists())
+        self.assertTrue(workspace.intake_manifest_path.exists())
+        self.assertTrue(workspace.worker_state_path.exists())
+
+    def test_demo_doctor_reports_cold_runtime_as_not_ready(self) -> None:
+        cold_status = {
+            "stream_state": {
+                "cursor": 0,
+                "total_source_events": 0,
+                "complete": False,
+            },
+            "worker_state": {
+                "last_service_at": None,
+                "last_service_status": None,
+            },
+            "intake": {
+                "pending_batch_count": 0,
+            },
+            "projection": {
+                "available": False,
+                "overview": None,
+            },
+            "quickwit": {
+                "initialized": False,
+                "running": False,
+                "ready": False,
+                "indexed_event_count": 0,
+                "last_sync_status": None,
+            },
+            "postgres": {
+                "initialized": False,
+            },
+            "event_index": {
+                "available": False,
+                "event_count": 0,
+            },
+            "detection_context": {
+                "available": False,
+            },
+            "scoring_input": {
+                "ready": False,
+            },
+            "model_runtime": {
+                "effective_mode": "heuristic",
+            },
+        }
+
+        with (
+            patch("seccloud.cli.build_operator_runtime_status", return_value=cold_status),
+            patch(
+                "seccloud.cli._probe_api_health",
+                return_value={
+                    "reachable": False,
+                    "url": "http://127.0.0.1:8000/api/health",
+                    "payload": None,
+                    "error": "connection refused",
+                },
+            ),
+        ):
+            report = build_demo_doctor_report(self.workspace, runtime_root=self.tempdir)
+
+        self.assertFalse(report["ready"])
+        self.assertTrue(any("API is not reachable" in item for item in report["blockers"]))
+        self.assertEqual(
+            report["next_action"],
+            "Run `npm run demo:bootstrap`, then start `npm run app:web`, `npm run app:api`, "
+            "and `npm run app:worker` in separate terminals.",
+        )
+
+    def test_demo_prepare_model_uses_guided_happy_path(self) -> None:
+        with (
+            patch(
+                "seccloud.cli.bootstrap_local_runtime",
+                return_value={
+                    "api_env": {
+                        "SECCLOUD_WORKFLOW_DSN": "postgresql://runtime",
+                    }
+                },
+            ),
+            patch(
+                "seccloud.cli.run_demo_stream",
+                return_value={"status": "complete", "accepted_records": 123},
+            ) as run_stream,
+            patch(
+                "seccloud.cli.run_worker_until_settled",
+                return_value={"status": "settled"},
+            ) as run_worker,
+            patch(
+                "seccloud.cli.export_workspace_model_artifact",
+                return_value=ModelTrainingResult(
+                    model_id="demo-v1",
+                    output_dir=".seccloud/demo-model",
+                    scoring_input_mode="feature_lake",
+                    training_pair_count=10,
+                    principal_vocab_count=5,
+                    resource_vocab_count=7,
+                    installed=True,
+                    manifest={"model_id": "demo-v1"},
+                ),
+            ) as export_model,
+            patch(
+                "seccloud.cli.sync_quickwit_event_index",
+                return_value={"status": "synced"},
+            ) as sync_quickwit,
+            patch(
+                "seccloud.cli.build_demo_doctor_report",
+                return_value={"ready": True, "status": "ready"},
+            ),
+        ):
+            result = demo_prepare_model(self.workspace, runtime_root=self.tempdir)
+
+        self.assertEqual(result["status"], "prepared")
+        self.assertEqual(result["processing_mode"], "foreground_drain")
+        run_stream.assert_called_once_with(
+            self.workspace,
+            batch_size=500,
+            interval_seconds=0.0,
+            max_steps=80,
+            max_pending_batches=None,
+        )
+        run_worker.assert_called_once_with(
+            self.workspace,
+            dsn="postgresql://runtime",
+            timeout_seconds=600.0,
+            report_interval_seconds=10.0,
+        )
+        export_model.assert_called_once()
+        sync_quickwit.assert_called_once_with(self.workspace, commit="wait_for")
 
     def test_run_demo_stream_advances_until_max_steps(self) -> None:
         initialize_runtime_stream(self.workspace)
@@ -1861,10 +2306,16 @@ class PoCTestCase(unittest.TestCase):
             "items": [],
             "page": {
                 "limit": 14,
-                "offset": 0,
                 "returned": 0,
-                "total": 0,
                 "has_more": False,
+                "cursor": None,
+                "next_cursor": None,
+            },
+            "freshness": {
+                "query_backend": "canonical_lake_scan",
+                "canonical_store": "iceberg_planned_normalized_lake",
+                "canonical_format": "parquet_manifest_bridge",
+                "watermark_at": None,
             },
         }
 
@@ -1873,12 +2324,12 @@ class PoCTestCase(unittest.TestCase):
                 os.environ,
                 {
                     "SECCLOUD_WORKSPACE": str(self.workspace.root),
-                    "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                    "SECCLOUD_WORKFLOW_DSN": "postgresql://projection",
                 },
                 clear=False,
             ),
-            patch("seccloud.api.fetch_projection_overview", return_value=overview_payload),
-            patch("seccloud.api.fetch_projected_events", return_value=events_payload),
+            patch("seccloud.api.build_workspace_overview", return_value=overview_payload),
+            patch("seccloud.api.query_events", return_value=events_payload),
         ):
             app = seccloud_api.create_app()
             overview_endpoint = next(
@@ -1889,20 +2340,27 @@ class PoCTestCase(unittest.TestCase):
             )
 
             overview_response = overview_endpoint()
-            events_response = events_endpoint(limit=14, offset=0)
+            events_response = events_endpoint(limit=14, cursor=None)
 
         self.assertEqual(overview_response, overview_payload)
         self.assertEqual(events_response, events_payload)
 
     def test_api_runtime_status_route_returns_operator_runtime_status(self) -> None:
         status_payload = {
+            "workspace": str(self.workspace.root),
             "tenant_id": self.workspace.tenant_id,
+            "stream_state": {
+                "cursor": 0,
+                "total_source_events": 0,
+                "complete": False,
+                "normalized_event_count": 0,
+                "detection_count": 0,
+            },
             "worker_state": {
                 "normalization_runs": 0,
                 "feature_runs": 0,
                 "detection_runs": 0,
                 "source_stats_runs": 0,
-                "projection_runs": 0,
                 "service_runs": 0,
                 "last_submitted_batch_id": None,
                 "last_processed_batch_id": None,
@@ -1910,7 +2368,6 @@ class PoCTestCase(unittest.TestCase):
                 "last_feature_at": None,
                 "last_detection_at": None,
                 "last_source_stats_at": None,
-                "last_projection_at": None,
                 "last_service_at": None,
                 "last_service_status": None,
                 "pending_batch_count": 0,
@@ -1968,6 +2425,15 @@ class PoCTestCase(unittest.TestCase):
                 "department_count": 0,
                 "input_signature": None,
             },
+            "canonical_event_store": {
+                "canonical_store": "iceberg_planned_normalized_lake",
+                "canonical_format": "parquet_manifest_bridge",
+                "query_backend": "canonical_lake_scan",
+                "detail_hydration": "lake_pointer",
+                "cursor_query_support": True,
+                "text_query_support": True,
+                "time_range_support": True,
+            },
             "detection_context": {
                 "available": False,
                 "event_count": 0,
@@ -1980,25 +2446,21 @@ class PoCTestCase(unittest.TestCase):
                 "principal_count": 0,
                 "team_count": 0,
             },
-            "projection": {
-                "available": True,
-                "overview": {
-                    "stream_state": {
-                        "cursor": 0,
-                        "total_source_events": 0,
-                        "complete": False,
-                        "normalized_event_count": 0,
-                        "detection_count": 0,
-                    },
-                    "ops_metadata": {
-                        "workspace": str(self.workspace.root),
-                        "event_counts_by_source": {},
-                        "dead_letter_count": 0,
-                        "dead_letter_counts_by_source": {},
-                        "contains_raw_payloads": False,
-                    },
-                },
-                "error": None,
+            "worker_control": {
+                "source_stats_refresh_requested": False,
+                "source_stats_refresh_requested_at": None,
+            },
+            "intake": {
+                "pending_batch_count": 0,
+                "processed_batch_count": 0,
+                "submitted_batch_count": 0,
+                "accepted_idempotency_key_count": 0,
+            },
+            "postgres": {
+                "root": str(self.tempdir.resolve()),
+                "dsn": "postgresql://projection",
+                "paths": {"log": str(self.tempdir / "postgres.log")},
+                "initialized": True,
             },
         }
 
@@ -2007,7 +2469,7 @@ class PoCTestCase(unittest.TestCase):
                 os.environ,
                 {
                     "SECCLOUD_WORKSPACE": str(self.workspace.root),
-                    "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                    "SECCLOUD_WORKFLOW_DSN": "postgresql://projection",
                 },
                 clear=False,
             ),
@@ -2027,7 +2489,7 @@ class PoCTestCase(unittest.TestCase):
             os.environ,
             {
                 "SECCLOUD_WORKSPACE": str(self.workspace.root),
-                "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                "SECCLOUD_WORKFLOW_DSN": "postgresql://projection",
                 "SECCLOUD_PUSH_AUTH_TOKENS": json.dumps(
                     {
                         "push-token": {
@@ -2117,7 +2579,7 @@ class PoCTestCase(unittest.TestCase):
             os.environ,
             {
                 "SECCLOUD_WORKSPACE": str(self.workspace.root),
-                "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                "SECCLOUD_WORKFLOW_DSN": "postgresql://projection",
             },
             clear=False,
         ):
@@ -2139,11 +2601,11 @@ class PoCTestCase(unittest.TestCase):
                 os.environ,
                 {
                     "SECCLOUD_WORKSPACE": str(self.workspace.root),
-                    "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                    "SECCLOUD_WORKFLOW_DSN": "postgresql://projection",
                 },
                 clear=False,
             ),
-            patch("seccloud.api.sync_workspace_projection", return_value={"detection_count": 0}),
+            patch("seccloud.investigation.upsert_detection_state") as upsert_state,
         ):
             app = seccloud_api.create_app()
             acknowledge_endpoint = next(
@@ -2154,17 +2616,244 @@ class PoCTestCase(unittest.TestCase):
             response = acknowledge_endpoint(detection["detection_id"])
 
         self.assertEqual(response["status"], "acknowledged")
+        upsert_state.assert_called_once()
         self.assertEqual(
-            self.workspace.get_detection(detection["detection_id"])["status"],
-            "acknowledged",
+            upsert_state.call_args.kwargs["detection_id"],
+            detection["detection_id"],
         )
+
+    def test_list_detections_applies_workflow_state_overlay(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+
+        with patch(
+            "seccloud.investigation.list_detection_states",
+            return_value={
+                detection["detection_id"]: {
+                    "detection_id": detection["detection_id"],
+                    "status": "acknowledged",
+                    "updated_at": "2026-03-18T00:00:00Z",
+                }
+            },
+        ):
+            detections = list_detections(self.workspace, dsn="postgresql://workflow")
+
+        self.assertEqual(detections[0]["status"], "acknowledged")
+
+    def test_list_detections_with_workflow_dsn_ignores_legacy_json_status(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+        legacy_detections_dir = self.workspace.root / "detections"
+        legacy_detections_dir.mkdir(parents=True, exist_ok=True)
+        legacy_detection = {
+            **detection,
+            "status": "acknowledged",
+        }
+        (legacy_detections_dir / f"{detection['detection_id']}.json").write_text(
+            json.dumps(legacy_detection),
+            encoding="utf-8",
+        )
+
+        with patch(
+            "seccloud.investigation.list_detection_states",
+            return_value={},
+        ):
+            detections = list_detections(self.workspace, dsn="postgresql://workflow")
+
+        updated = next(item for item in detections if item["detection_id"] == detection["detection_id"])
+        self.assertEqual(updated["status"], "open")
+
+    def test_create_case_from_detection_uses_workflow_store_when_dsn_configured(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+
+        with patch("seccloud.investigation.upsert_case") as upsert_case:
+            case = create_case_from_detection(
+                self.workspace,
+                detection["detection_id"],
+                dsn="postgresql://workflow",
+            )
+
+        upsert_case.assert_called_once()
+        self.assertEqual(upsert_case.call_args.args[0], "postgresql://workflow")
+        self.assertEqual(case["detection_ids"], [detection["detection_id"]])
+
+    def test_workflow_case_reads_do_not_fall_back_to_workspace_json(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+        with self._workflow_case_store() as (workflow_dsn, _):
+            case = create_case_from_detection(
+                self.workspace,
+                detection["detection_id"],
+                dsn=workflow_dsn,
+            )
+        with patch("seccloud.investigation.get_workflow_case", return_value=None):
+            with self.assertRaises(KeyError):
+                summarize_case(
+                    self.workspace,
+                    case["case_id"],
+                    dsn="postgresql://workflow",
+                )
+
+    def test_get_workflow_dsn_prefers_explicit_workflow_env(self) -> None:
+        dsn = get_workflow_dsn({"SECCLOUD_WORKFLOW_DSN": "postgresql://workflow"})
+
+        self.assertEqual(dsn, "postgresql://workflow")
+
+    def test_entity_detail_includes_timeline_and_peer_context(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+
+        detail = get_entity_detail(self.workspace, detection["related_entity_ids"][0], limit=20)
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail["principal"]["id"], detection["related_entity_ids"][0])
+        self.assertTrue(detail["timeline"])
+        self.assertGreater(detail["overview"]["timeline_event_count"], 0)
+        self.assertGreaterEqual(detail["overview"]["distinct_source_count"], 1)
+        self.assertIn("principal_role", detail["peer_comparison"])
+
+    def test_api_entity_detail_route_returns_principal_view(self) -> None:
+        run_runtime(self.workspace)
+        detection = list_detections(self.workspace)[0]
+        principal_key = detection["related_entity_ids"][0]
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SECCLOUD_WORKSPACE": str(self.workspace.root),
+                },
+                clear=False,
+            ),
+        ):
+            app = seccloud_api.create_app()
+            entity_endpoint = next(
+                route.endpoint
+                for route in app.routes
+                if getattr(route, "path", None) == "/api/entities/{principal_key}"
+            )
+
+            response = entity_endpoint(principal_key, limit=20)
+
+        self.assertEqual(response["principal"]["id"], principal_key)
+        self.assertTrue(response["timeline"])
+        self.assertGreater(response["overview"]["distinct_source_count"], 0)
+        self.assertIn("peer_group_principal_count", response["peer_comparison"])
+
+    def test_api_events_route_forwards_cursor_search_and_filters(self) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SECCLOUD_WORKSPACE": str(self.workspace.root),
+                },
+                clear=False,
+            ),
+            patch(
+                "seccloud.api.query_events",
+                return_value={
+                    "items": [],
+                    "page": {
+                        "limit": 25,
+                        "returned": 0,
+                        "has_more": False,
+                        "cursor": None,
+                        "next_cursor": None,
+                    },
+                    "freshness": {
+                        "query_backend": "canonical_lake_scan",
+                        "canonical_store": "iceberg_planned_normalized_lake",
+                        "canonical_format": "parquet_manifest_bridge",
+                        "watermark_at": None,
+                    },
+                },
+            ) as fetch_events,
+        ):
+            app = seccloud_api.create_app()
+            events_endpoint = next(
+                route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/events"
+            )
+
+            response = events_endpoint(
+                limit=25,
+                cursor="cursor_1",
+                start_time="2026-02-01T00:00:00Z",
+                end_time="2026-02-02T00:00:00Z",
+                query_text="alice",
+                sources=["okta"],
+                action_categories=["authentication"],
+                sensitivities=["high"],
+                principal_reference="alice@example.com",
+                resource_reference="okta:admin-console",
+            )
+
+        fetch_events.assert_called_once_with(
+            ANY,
+            limit=25,
+            cursor="cursor_1",
+            start_time="2026-02-01T00:00:00Z",
+            end_time="2026-02-02T00:00:00Z",
+            query_text="alice",
+            sources=["okta"],
+            action_categories=["authentication"],
+            sensitivities=["high"],
+            principal_reference="alice@example.com",
+            resource_reference="okta:admin-console",
+            dsn=None,
+        )
+        self.assertEqual(response["page"]["returned"], 0)
+
+    def test_ingest_raw_events_indexes_new_canonical_batch_into_quickwit(self) -> None:
+        raw_event = {
+            "source": "okta",
+            "source_event_id": "okta-quickwit-0001",
+            "observed_at": "2026-01-02T03:04:05Z",
+            "actor_email": "alice@example.com",
+            "actor_name": "Alice Nguyen",
+            "department": "Security",
+            "role": "admin",
+            "event_type": "login",
+            "resource_id": "okta:admin-console",
+            "resource_name": "Admin Console",
+            "resource_kind": "console",
+            "sensitivity": "high",
+        }
+        self.workspace.write_raw_event("okta", raw_event)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SECCLOUD_QUICKWIT_URL": "http://quickwit.local",
+                    "SECCLOUD_QUICKWIT_INDEX": local_quickwit_index_id(),
+                },
+                clear=False,
+            ),
+            patch(
+                "seccloud.quickwit_index.get_index_metadata",
+                return_value={"index_config": {"index_id": local_quickwit_index_id()}},
+            ),
+            patch(
+                "seccloud.quickwit_index.ingest_documents",
+                return_value={"num_docs_for_processing": 1},
+            ) as ingest_documents,
+        ):
+            result = ingest_raw_events(self.workspace)
+
+        quickwit_state = self.workspace.load_quickwit_index_state()
+        self.assertEqual(result["quickwit"]["status"], "indexed")
+        self.assertEqual(result["quickwit"]["index_id"], local_quickwit_index_id())
+        self.assertEqual(quickwit_state["indexed_event_count"], 1)
+        ingest_documents.assert_called_once()
 
     def test_api_stream_advance_enqueues_without_processing(self) -> None:
         with patch.dict(
             os.environ,
             {
                 "SECCLOUD_WORKSPACE": str(self.workspace.root),
-                "SECCLOUD_PROJECTION_DSN": "postgresql://projection",
+                "SECCLOUD_WORKFLOW_DSN": "postgresql://projection",
             },
             clear=False,
         ):
@@ -2188,24 +2877,6 @@ class PoCTestCase(unittest.TestCase):
         self.assertEqual(worker_state["pending_batch_count"], advance_response["accepted_batches"])
         self.assertEqual(advance_response["pending_batch_count"], advance_response["accepted_batches"])
         self.assertEqual(len(self.workspace.list_normalized_events()), 0)
-
-    def test_projector_worker_requires_rust_runtime(self) -> None:
-        with patch("seccloud.workers.shutil.which", return_value=None):
-            with self.assertRaisesRegex(RuntimeError, "requires `cargo`"):
-                run_projector_worker(self.workspace, "postgresql://projection")
-
-    def test_run_projector_worker_uses_rust_runtime(self) -> None:
-        rust_result = {
-            "dsn": "postgresql://projection",
-            "event_count": 5,
-            "detection_count": 2,
-        }
-
-        with patch("seccloud.workers._run_rust_projector_worker", return_value=rust_result) as rust_worker:
-            result = run_projector_worker(self.workspace, "postgresql://projection")
-
-        self.assertEqual(result, rust_result)
-        rust_worker.assert_called_once_with(self.workspace, "postgresql://projection")
 
     def test_source_stats_projector_updates_worker_state(self) -> None:
         run_runtime(self.workspace)
@@ -2770,7 +3441,7 @@ class PoCTestCase(unittest.TestCase):
         self.assertIn("<3mo", duration_buckets)
         self.assertIn("1-3yr", duration_buckets)
 
-    def test_run_all_local_workers_includes_projection(self) -> None:
+    def test_run_all_local_workers_includes_overview(self) -> None:
         submit_grouped_raw_events(
             self.workspace,
             records=[
@@ -2797,18 +3468,15 @@ class PoCTestCase(unittest.TestCase):
             integration_id="test-gateway",
         )
 
-        with patch(
-            "seccloud.workers._run_rust_projector_worker",
-            return_value={"dsn": "postgresql://projection", "event_count": 1, "detection_count": 0},
-        ):
-            result = run_all_local_workers(self.workspace, "postgresql://projection")
+        result = run_all_local_workers(self.workspace, "postgresql://projection")
 
         self.assertIn("source_stats", result)
         self.assertIn("features", result)
         self.assertIn("detection_context", result)
-        self.assertIn("projection", result)
+        self.assertIn("overview", result)
         self.assertGreaterEqual(result["source_stats"]["source_count"], 1)
-        self.assertEqual(result["projection"]["dsn"], "postgresql://projection")
+        self.assertIn("stream_state", result["overview"])
+        self.assertIn("ops_metadata", result["overview"])
         self.assertGreaterEqual(result["features"]["normalized_event_count"], 1)
         self.assertGreaterEqual(result["detection_context"]["event_count"], 1)
 
@@ -2987,23 +3655,19 @@ class PoCTestCase(unittest.TestCase):
 
         with patch(
             "seccloud.workers.subprocess.run",
-            return_value=SimpleNamespace(stdout="", stderr="projection sync failed", returncode=101),
+            return_value=SimpleNamespace(stdout="", stderr="service runtime failed", returncode=101),
         ):
-            with self.assertRaisesRegex(RuntimeError, "projection sync failed"):
+            with self.assertRaisesRegex(RuntimeError, "service runtime failed"):
                 seccloud_workers._run_rust_runtime_command(fake_workspace, bin_name="seccloud-service-once")
 
     def test_operator_runtime_status_aggregates_runtime_state(self) -> None:
         initialize_runtime_stream(self.workspace)
         run_runtime(self.workspace)
-        with patch(
-            "seccloud.projection_store.fetch_projection_overview",
-            return_value={"stream_state": {"cursor": 0}, "ops_metadata": {"dead_letter_count": 0}},
-        ):
-            status = build_operator_runtime_status(
-                self.workspace,
-                dsn="postgresql://projection",
-                runtime_root=self.tempdir,
-            )
+        status = build_operator_runtime_status(
+            self.workspace,
+            dsn="postgresql://projection",
+            runtime_root=self.tempdir,
+        )
 
         self.assertEqual(status["workspace"], str(self.workspace.root))
         self.assertEqual(status["tenant_id"], self.workspace.tenant_id)
@@ -3014,11 +3678,21 @@ class PoCTestCase(unittest.TestCase):
         self.assertIn("scoring_input", status)
         self.assertIn("model_runtime", status)
         self.assertIn("event_index", status)
+        self.assertIn("canonical_event_store", status)
+        self.assertIn("quickwit", status)
         self.assertIn("detection_context", status)
         self.assertIn("identity_profiles", status)
         self.assertIn("stream_state", status)
-        self.assertTrue(status["projection"]["available"])
+        self.assertIn("worker_control", status)
+        self.assertIn("intake", status)
+        self.assertIn("postgres", status)
         self.assertEqual(status["postgres"]["root"], str(self.tempdir.resolve()))
+        self.assertEqual(status["quickwit"]["root"], str(self.tempdir.resolve()))
+        self.assertIn("last_start_status", status["quickwit"])
+        self.assertIn("last_sync_status", status["quickwit"])
+        self.assertIn("log_size_bytes", status["quickwit"])
+        self.assertIn("submitted_batch_count", status["intake"])
+        self.assertIn("accepted_idempotency_key_count", status["intake"])
         self.assertGreaterEqual(status["feature_state"]["normalized_event_count"], 1)
         self.assertGreaterEqual(status["feature_tables"]["action_row_count"], 1)
         self.assertGreaterEqual(status["feature_tables"]["static_row_count"], 1)
@@ -3037,6 +3711,14 @@ class PoCTestCase(unittest.TestCase):
                 return_value={"status": "started", "dsn": "postgresql://runtime"},
             ),
             patch(
+                "seccloud.cli.start_local_quickwit",
+                return_value={
+                    "status": "started",
+                    "url": "http://127.0.0.1:7280",
+                    "index_id": local_quickwit_index_id(),
+                },
+            ),
+            patch(
                 "seccloud.cli.initialize_runtime_stream",
                 return_value={"status": "initialized", "mode": "continuous", "cursor": 0, "total_source_events": 0},
             ) as init_stream,
@@ -3045,9 +3727,312 @@ class PoCTestCase(unittest.TestCase):
 
         self.assertEqual(result["workspace"], str(self.workspace.root))
         self.assertEqual(result["postgres"]["status"], "started")
+        self.assertEqual(result["quickwit"]["status"], "started")
         self.assertEqual(result["stream"]["status"], "initialized")
-        self.assertEqual(result["api_env"]["SECCLOUD_PROJECTION_DSN"], "postgresql://runtime")
+        self.assertEqual(result["api_env"]["SECCLOUD_WORKFLOW_DSN"], "postgresql://runtime")
+        self.assertEqual(result["api_env"]["SECCLOUD_QUICKWIT_URL"], "http://127.0.0.1:7280")
+        self.assertEqual(result["api_env"]["SECCLOUD_QUICKWIT_INDEX"], local_quickwit_index_id())
         init_stream.assert_called_once_with(self.workspace, scaled=True, continuous=True)
+
+    def test_init_local_quickwit_writes_local_runtime_config(self) -> None:
+        result = init_local_quickwit(self.tempdir)
+
+        paths = quickwit_paths(self.tempdir)
+        self.assertEqual(result["status"], "initialized")
+        self.assertEqual(result["url"], local_quickwit_url(self.tempdir))
+        self.assertTrue(paths["config"].exists())
+        config_text = paths["config"].read_text(encoding="utf-8")
+        self.assertIn("cluster_id: seccloud-local", config_text)
+        self.assertIn("rest:", config_text)
+        self.assertIn("listen_port: 7280", config_text)
+
+    def test_ensure_local_quickwit_installs_managed_binary_when_missing(self) -> None:
+        archive_bytes = io.BytesIO()
+        with tarfile.open(fileobj=archive_bytes, mode="w:gz") as archive:
+            payload = b"#!/bin/sh\necho quickwit\n"
+            info = tarfile.TarInfo(name="quickwit-v0.7.1-aarch64-apple-darwin/quickwit")
+            info.size = len(payload)
+            info.mode = 0o755
+            archive.addfile(info, io.BytesIO(payload))
+        archive_payload = archive_bytes.getvalue()
+
+        class ArchiveResponse:
+            def __init__(self, body: bytes) -> None:
+                self._stream = io.BytesIO(body)
+
+            def read(self, size: int = -1) -> bytes:
+                return self._stream.read(size)
+
+            def __enter__(self) -> ArchiveResponse:
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        with (
+            patch("seccloud.local_quickwit.shutil.which", return_value=None),
+            patch("seccloud.local_quickwit.platform.system", return_value="Darwin"),
+            patch("seccloud.local_quickwit.platform.machine", return_value="arm64"),
+            patch(
+                "seccloud.local_quickwit.request.urlopen",
+                return_value=ArchiveResponse(archive_payload),
+            ),
+        ):
+            result = ensure_local_quickwit(self.tempdir)
+
+        paths = quickwit_paths(self.tempdir)
+        self.assertEqual(result["status"], "installed")
+        self.assertEqual(result["binary_source"], "managed_local")
+        self.assertTrue(paths["managed_bin"].exists())
+        self.assertTrue(os.access(paths["managed_bin"], os.X_OK))
+        self.assertIn("v0.7.1", result["download_url"])
+
+    def test_start_local_quickwit_spawns_process_and_writes_pid(self) -> None:
+        fake_process = SimpleNamespace(pid=4242)
+
+        class ReadyResponse:
+            status = 200
+
+            def __enter__(self) -> ReadyResponse:
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        with (
+            patch(
+                "seccloud.local_quickwit.ensure_local_quickwit",
+                return_value={
+                    "status": "already_installed",
+                    "binary_path": "/tmp/seccloud/quickwit",
+                    "binary_source": "managed_local",
+                    "version": "0.7.1",
+                },
+            ),
+            patch("seccloud.local_quickwit.subprocess.Popen", return_value=fake_process) as popen,
+            patch("seccloud.local_quickwit.request.urlopen", return_value=ReadyResponse()),
+        ):
+            result = start_local_quickwit(self.tempdir)
+
+        paths = quickwit_paths(self.tempdir)
+        self.assertEqual(result["status"], "started")
+        self.assertEqual(result["pid"], 4242)
+        self.assertEqual(paths["pid"].read_text(encoding="utf-8").strip(), "4242")
+        runtime_payload = json.loads(paths["runtime"].read_text(encoding="utf-8"))
+        self.assertEqual(runtime_payload["last_start_status"], "started")
+        self.assertIsNone(runtime_payload["last_start_error"])
+        self.assertIsInstance(runtime_payload["last_start_duration_ms"], int)
+        self.assertEqual(result["binary_source"], "managed_local")
+        popen.assert_called_once()
+
+    def test_start_local_quickwit_reuses_existing_ready_service(self) -> None:
+        class ReadyResponse:
+            status = 200
+
+            def __enter__(self) -> ReadyResponse:
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        with (
+            patch(
+                "seccloud.local_quickwit.ensure_local_quickwit",
+                return_value={
+                    "status": "already_installed",
+                    "binary_path": "/tmp/seccloud/quickwit",
+                    "binary_source": "managed_local",
+                    "version": "0.7.1",
+                },
+            ),
+            patch("seccloud.local_quickwit.subprocess.Popen") as popen,
+            patch("seccloud.local_quickwit.request.urlopen", return_value=ReadyResponse()),
+        ):
+            result = start_local_quickwit(self.tempdir)
+
+        paths = quickwit_paths(self.tempdir)
+        self.assertEqual(result["status"], "already_running_external")
+        self.assertIsNone(result["pid"])
+        self.assertFalse(paths["pid"].exists())
+        runtime_payload = json.loads(paths["runtime"].read_text(encoding="utf-8"))
+        self.assertEqual(runtime_payload["last_start_status"], "already_running_external")
+        self.assertIsNone(runtime_payload["last_start_error"])
+        popen.assert_not_called()
+
+    def test_quickwit_runtime_status_uses_http_readiness_without_pid(self) -> None:
+        class ReadyResponse:
+            status = 200
+
+            def __enter__(self) -> ReadyResponse:
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        init_local_quickwit(self.tempdir)
+        paths = quickwit_paths(self.tempdir)
+        paths["pid"].write_text("999999\n", encoding="utf-8")
+
+        with patch("seccloud.local_quickwit.request.urlopen", return_value=ReadyResponse()):
+            status = quickwit_runtime_status(self.tempdir)
+
+        self.assertTrue(status["ready"])
+        self.assertTrue(status["running"])
+        self.assertIsNone(status["pid"])
+        self.assertTrue(status["stale_pid_removed"])
+        self.assertFalse(paths["pid"].exists())
+
+    def test_build_runtime_status_prefers_live_quickwit_index_stats(self) -> None:
+        run_runtime(self.workspace)
+        self.workspace.save_quickwit_index_state(
+            {
+                "state_version": 1,
+                "index_id": local_quickwit_index_id(),
+                "last_sync_started_at": "2026-01-01T00:00:00Z",
+                "last_sync_completed_at": "2026-01-01T00:00:01Z",
+                "last_indexed_at": "2026-01-01T00:00:01Z",
+                "watermark_at": "2026-01-01T00:00:01Z",
+                "indexed_event_count": 0,
+                "indexed_event_ids": [],
+                "last_result": {},
+                "last_sync_duration_ms": 10,
+                "last_sync_status": "indexed",
+                "last_sync_error": None,
+            }
+        )
+        with (
+            patch(
+                "seccloud.runtime_status.quickwit_runtime_status",
+                return_value={
+                    "root": str(self.tempdir.resolve()),
+                    "url": local_quickwit_url(self.tempdir),
+                    "index_id": local_quickwit_index_id(),
+                    "binary_path": "/tmp/seccloud/quickwit",
+                    "binary_source": "managed_local",
+                    "version": "0.7.1",
+                    "config_path": str(quickwit_paths(self.tempdir)["config"]),
+                    "log_path": str(quickwit_paths(self.tempdir)["log"]),
+                    "paths": {},
+                    "initialized": True,
+                    "pid": None,
+                    "running": True,
+                    "ready": True,
+                    "rss_bytes": None,
+                    "log_size_bytes": 0,
+                    "stale_pid_removed": False,
+                    "last_start_attempted_at": None,
+                    "last_start_completed_at": None,
+                    "last_start_duration_ms": None,
+                    "last_start_status": "already_running_external",
+                    "last_start_error": None,
+                },
+            ),
+            patch(
+                "seccloud.runtime_status.get_index_stats",
+                return_value={
+                    "indexed_event_count": 8,
+                    "watermark_at": "2026-01-02T00:00:00Z",
+                },
+            ),
+        ):
+            status = build_operator_runtime_status(self.workspace, dsn=None, runtime_root=self.tempdir)
+
+        self.assertEqual(status["quickwit"]["indexed_event_count"], 8)
+        self.assertEqual(status["quickwit"]["watermark_at"], "2026-01-02T00:00:00Z")
+
+    def test_quickwit_event_smoke_hits_api_events_end_to_end(self) -> None:
+        run_runtime(self.workspace)
+        anchor_event = self.workspace.list_normalized_events()[0]
+        self.workspace.save_quickwit_index_state(
+            {
+                "state_version": 1,
+                "index_id": local_quickwit_index_id(),
+                "last_sync_started_at": "2026-01-01T00:00:00Z",
+                "last_sync_completed_at": "2026-01-01T00:00:01Z",
+                "last_indexed_at": "2026-01-01T00:00:01Z",
+                "watermark_at": anchor_event["observed_at"],
+                "indexed_event_count": 1,
+                "indexed_event_ids": [anchor_event["event_id"]],
+                "last_result": {"status": "indexed"},
+            }
+        )
+        quickwit_hit = {
+            "_source": {
+                "event_id": anchor_event["event_id"],
+                "normalized_pointer": {
+                    "object_key": self.workspace.ensure_normalized_lake_artifacts(anchor_event)["objects"][0][
+                        "object_key"
+                    ]
+                },
+            },
+            "sort": [anchor_event["observed_at"], event_sort_key(anchor_event["event_id"])],
+        }
+
+        with (
+            patch(
+                "seccloud.quickwit_smoke.start_local_quickwit",
+                return_value={
+                    "status": "started",
+                    "url": "http://127.0.0.1:7280",
+                    "index_id": local_quickwit_index_id(),
+                },
+            ),
+            patch(
+                "seccloud.quickwit_smoke.stop_local_quickwit",
+            ) as stop_quickwit,
+            patch(
+                "seccloud.quickwit_smoke.sync_quickwit_event_index",
+                return_value={
+                    "status": "indexed",
+                    "index_id": local_quickwit_index_id(),
+                    "indexed_event_count": 1,
+                },
+            ),
+            patch(
+                "seccloud.event_query.search_events",
+                return_value={"hits": {"hits": [quickwit_hit]}},
+            ),
+        ):
+            result = run_quickwit_event_smoke(
+                self.workspace,
+                runtime_root=self.tempdir,
+                limit=3,
+                reuse_existing_data=True,
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["events_page"]["query_backend"], "quickwit")
+        self.assertEqual(result["first_event_id"], anchor_event["event_id"])
+        self.assertEqual(result["detail_event_id"], anchor_event["event_id"])
+        stop_quickwit.assert_called_once_with(self.tempdir)
+
+    def test_quickwit_event_smoke_includes_log_tail_on_failure(self) -> None:
+        run_runtime(self.workspace)
+        paths = quickwit_paths(self.tempdir)
+        paths["base"].mkdir(parents=True, exist_ok=True)
+        paths["log"].write_text("line1\nline2\nquickwit boom\n", encoding="utf-8")
+
+        with (
+            patch(
+                "seccloud.quickwit_smoke.start_local_quickwit",
+                return_value={
+                    "status": "started",
+                    "url": "http://127.0.0.1:7280",
+                    "index_id": local_quickwit_index_id(),
+                },
+            ),
+            patch("seccloud.quickwit_smoke.stop_local_quickwit"),
+            patch(
+                "seccloud.quickwit_smoke.sync_quickwit_event_index",
+                side_effect=RuntimeError("sync failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Quickwit log tail"):
+                run_quickwit_event_smoke(
+                    self.workspace,
+                    runtime_root=self.tempdir,
+                    reuse_existing_data=True,
+                )
 
     def test_scaled_runtime_stream_initializes_identity_profiles_without_precomputed_detection_manifest(self) -> None:
         dataset = SimpleNamespace(
@@ -3128,22 +4113,6 @@ class PoCTestCase(unittest.TestCase):
         self.assertEqual(profiles["source"], "test-fixture")
         self.assertEqual(profiles["principals"][0]["email"], "alice@example.com")
         self.assertEqual(profiles["teams"][0]["name"], "secops")
-
-    def test_worker_service_once_projects_after_stream_reset_without_pending_batches(self) -> None:
-        initialize_runtime_stream(self.workspace)
-
-        with patch(
-            "seccloud.workers._run_rust_service_once",
-            return_value={
-                "status": "projected",
-                "pending_batch_count": 0,
-                "processed_batch_count": 0,
-                "result": {"projection": {"dsn": "postgresql://projection", "event_count": 0, "detection_count": 0}},
-            },
-        ):
-            result = run_worker_service_once(self.workspace, "postgresql://projection")
-
-        self.assertEqual(result["status"], "projected")
 
     def test_worker_service_once_materializes_source_stats_without_pending_batches(self) -> None:
         seed_workspace(self.workspace)

@@ -551,7 +551,7 @@ fn detection_row_from_payload(
     })
 }
 
-fn persist_detections(
+async fn persist_detections(
     workspace: &Path,
     detections: &[DetectionPayload],
     detection_context: &DetectionContextFile,
@@ -579,10 +579,7 @@ fn persist_detections(
         .map(|detection| detection.model_version.clone())
         .unwrap_or_else(|| "unknown".to_string());
     let store = LocalObjectStore::new(workspace);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(write_detection_batch(
+    write_detection_batch(
         &store,
         DetectionBatchWriteInput {
             descriptor: DetectionBatchDescriptor {
@@ -596,7 +593,8 @@ fn persist_detections(
             model_version,
             rows,
         },
-    ))?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -1602,7 +1600,7 @@ fn collect_ops_metadata(workspace: &Path) -> anyhow::Result<OpsMetadata> {
     Ok(metadata)
 }
 
-fn run_heuristic_detection(workspace: &Path) -> anyhow::Result<DetectionResult> {
+async fn run_heuristic_detection(workspace: &Path) -> anyhow::Result<DetectionResult> {
     let event_index = ensure_event_index(workspace)?;
     let detection_context = ensure_detection_context(workspace)?;
     let prior_state = load_derived_state(workspace)?;
@@ -1624,7 +1622,8 @@ fn run_heuristic_detection(workspace: &Path) -> anyhow::Result<DetectionResult> 
         &new_detection_payloads,
         &detection_context,
         "heuristic",
-    )?;
+    )
+    .await?;
 
     let derived_state = build_derived_state(prior_state, &detection_context);
     save_derived_state(workspace, &derived_state)?;
@@ -1635,14 +1634,14 @@ fn run_heuristic_detection(workspace: &Path) -> anyhow::Result<DetectionResult> 
     })
 }
 
-fn run_model_detection(workspace: &Path) -> anyhow::Result<DetectionResult> {
+async fn run_model_detection(workspace: &Path) -> anyhow::Result<DetectionResult> {
     let event_index = ensure_event_index(workspace)?;
     let detection_context = ensure_detection_context(workspace)?;
     let prior_state = load_derived_state(workspace)?;
     let mut existing_detection_ids = existing_detection_ids(workspace)?;
     let model_detections = match model_detections(workspace, &event_index, &detection_context) {
         Ok(detections) => detections,
-        Err(_) => return run_heuristic_detection(workspace),
+        Err(_) => return run_heuristic_detection(workspace).await,
     };
     let mut new_detections = 0;
     let mut new_detection_payloads = Vec::new();
@@ -1661,7 +1660,8 @@ fn run_model_detection(workspace: &Path) -> anyhow::Result<DetectionResult> {
         &new_detection_payloads,
         &detection_context,
         "onnx_native",
-    )?;
+    )
+    .await?;
 
     let derived_state = build_derived_state(prior_state, &detection_context);
     save_derived_state(workspace, &derived_state)?;
@@ -1672,12 +1672,12 @@ fn run_model_detection(workspace: &Path) -> anyhow::Result<DetectionResult> {
     })
 }
 
-pub fn run_detection_worker(workspace: &Path) -> anyhow::Result<DetectionWorkerResult> {
+pub async fn run_detection_worker_async(workspace: &Path) -> anyhow::Result<DetectionWorkerResult> {
     let scoring_runtime = resolve_model_runtime_status(workspace)?;
     let detect = if scoring_runtime.effective_mode == "onnx_native" {
-        run_model_detection(workspace)?
+        run_model_detection(workspace).await?
     } else {
-        run_heuristic_detection(workspace)?
+        run_heuristic_detection(workspace).await?
     };
     let ops_metadata = collect_ops_metadata(workspace)?;
     Ok(DetectionWorkerResult {
@@ -1685,6 +1685,18 @@ pub fn run_detection_worker(workspace: &Path) -> anyhow::Result<DetectionWorkerR
         ops_metadata,
         scoring_runtime,
     })
+}
+
+pub fn run_detection_worker(workspace: &Path) -> anyhow::Result<DetectionWorkerResult> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        anyhow::bail!(
+            "run_detection_worker cannot be called from within a Tokio runtime; use run_detection_worker_async"
+        );
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_detection_worker_async(workspace))
 }
 
 pub fn compare_detection_modes(workspace: &Path) -> anyhow::Result<DetectionModeComparisonResult> {
@@ -2335,6 +2347,80 @@ export_model_artifact_bundle(
                 .and_then(Value::as_str),
             Some("event_index_detection_context")
         );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn async_detection_worker_builds_context_and_detection() {
+        let root = test_workspace();
+        let events = [
+            normalized_event("evt_1", "2026-03-10T10:00:00Z", "read", "repo-1"),
+            normalized_event("evt_2", "2026-03-10T10:01:00Z", "read", "repo-2"),
+            normalized_event("evt_3", "2026-03-10T10:02:00Z", "read", "repo-3"),
+            normalized_event(
+                "evt_4",
+                "2026-03-10T10:03:00Z",
+                "archive_download",
+                "repo-sensitive",
+            ),
+        ];
+        for (index, event) in events.iter().enumerate() {
+            write_json(
+                &root
+                    .join("normalized/source=github")
+                    .join(format!("event-{index}.json")),
+                event,
+            )
+            .unwrap();
+        }
+        crate::local_runtime::save_ingest_manifest(
+            &root,
+            &crate::local_runtime::IngestManifestState {
+                normalized_event_ids: vec![
+                    "evt_1".into(),
+                    "evt_2".into(),
+                    "evt_3".into(),
+                    "evt_4".into(),
+                ],
+                normalized_event_keys: vec![
+                    "evk_evt_1".into(),
+                    "evk_evt_2".into(),
+                    "evk_evt_3".into(),
+                    "evk_evt_4".into(),
+                ],
+                ..crate::local_runtime::IngestManifestState::default()
+            },
+        )
+        .unwrap();
+        write_json(
+            &crate::local_runtime::source_stats_path(&root),
+            &SourceStatsFile {
+                sources: BTreeMap::from([(
+                    "github".into(),
+                    crate::local_runtime::SourceStats {
+                        normalized_event_count: 4,
+                        ..crate::local_runtime::SourceStats::default()
+                    },
+                )]),
+            },
+        )
+        .unwrap();
+
+        let result = run_detection_worker_async(&root).await.unwrap();
+
+        assert_eq!(result.detect.normalized_event_count, 4);
+        assert_eq!(result.detect.new_detection_count, 1);
+        assert_eq!(result.detect.total_detection_count, 1);
+        let detection_manifests = collect_json_files(
+            &root
+                .join("lake")
+                .join("manifests")
+                .join("layout=v1")
+                .join("type=detection"),
+        )
+        .unwrap();
+        assert_eq!(detection_manifests.len(), 1);
 
         std::fs::remove_dir_all(root).unwrap();
     }

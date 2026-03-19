@@ -41,8 +41,6 @@ def _build_report_metrics(workspace: Workspace) -> dict[str, object]:
     detection_scenarios = sorted({item["scenario"] for item in detections})
     feature_tables = runtime_status["feature_tables"]
     materialized_feature_tables = sum(1 for value in feature_tables.values() if int(value) > 0)
-    projection = runtime_status["projection"]
-    projection_stream = projection.get("overview", {}).get("stream_state", {})
     return {
         "detections": detections,
         "dead_letters": dead_letters,
@@ -73,9 +71,8 @@ def _build_report_metrics(workspace: Workspace) -> dict[str, object]:
         "identity_profile_principal_count": runtime_status["identity_profiles"]["principal_count"],
         "identity_profile_team_count": runtime_status["identity_profiles"]["team_count"],
         "identity_profile_source": runtime_status["identity_profiles"]["source"] or "unknown",
-        "projected_normalized_event_count": projection_stream.get("normalized_event_count", 0),
-        "projected_detection_count": projection_stream.get("detection_count", 0),
-        "projection_available": bool(projection.get("available")),
+        "stream_normalized_event_count": runtime_status["stream_state"]["normalized_event_count"],
+        "stream_detection_count": runtime_status["stream_state"]["detection_count"],
     }
 
 
@@ -148,9 +145,8 @@ for `{metrics["detection_context_event_count"]}` events
 - Identity profiles loaded: `{metrics["identity_profile_principal_count"]}` principals / \
 `{metrics["identity_profile_team_count"]}` teams \
 (`{metrics["identity_profile_source"]}`)
-- Projection available: `{metrics["projection_available"]}`
-- Projected normalized events/detections: \
-`{metrics["projected_normalized_event_count"]}/{metrics["projected_detection_count"]}`
+- Runtime stream normalized events/detections: \
+`{metrics["stream_normalized_event_count"]}/{metrics["stream_detection_count"]}`
 
 ## Next Build Priorities
 - Expand beyond the current benign-drift controls into much richer drift and \

@@ -78,51 +78,11 @@ def _build_finite_test_source_events() -> tuple[list[dict[str, Any]], dict[str, 
 
 
 def _normalized_event_count(workspace: Workspace) -> int:
-    """Get the count of normalized events, preferring postgres over manifest."""
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        from seccloud.projection_store import HOT_EVENT_INDEX_TABLE, _tbl, default_projection_dsn
-
-        dsn = default_projection_dsn()
-        with psycopg.connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                hei = _tbl(HOT_EVENT_INDEX_TABLE)
-                cur.execute(
-                    psycopg.sql.SQL("select count(*) as n from {hei} where tenant_id = %s").format(hei=hei),
-                    (workspace.tenant_id,),
-                )
-                return cur.fetchone()["n"]
-    except Exception:
-        return len(workspace.load_ingest_manifest().get("normalized_event_ids", []))
+    return len(workspace.load_ingest_manifest().get("normalized_event_ids", []))
 
 
 def _active_detection_count(workspace: Workspace) -> int:
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        from seccloud.projection_store import (
-            PROJECTED_DETECTIONS_TABLE,
-            _tbl,
-            default_projection_dsn,
-        )
-
-        dsn = default_projection_dsn()
-        with psycopg.connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                pd = _tbl(PROJECTED_DETECTIONS_TABLE)
-                cur.execute(
-                    psycopg.sql.SQL(
-                        "select count(*) as n from {pd} where tenant_id = %s "
-                        "and coalesce(payload->>'status', 'open') = 'open'"
-                    ).format(pd=pd),
-                    (workspace.tenant_id,),
-                )
-                return cur.fetchone()["n"]
-    except Exception:
-        return sum(1 for d in workspace.list_detections() if d.get("status", "open") == "open")
+    return sum(1 for d in workspace.list_detections() if d.get("status", "open") == "open")
 
 
 def _stream_manifest_path(workspace: Workspace):
@@ -214,7 +174,6 @@ def _initialize_continuous_runtime_stream(
         ),
     )
     write_json(_stream_source_events_path(workspace), _continuous_stream_payload([]))
-    workspace.request_projection_refresh()
     return {
         "status": "initialized",
         "mode": CONTINUOUS_STREAM_MODE,
@@ -531,7 +490,6 @@ def initialize_runtime_stream(
         workspace.manifests_dir / "runtime_stream_source_events.json",
         {"source_events": source_events, "expectations": expectations},
     )
-    workspace.request_projection_refresh()
     return {
         "status": "initialized",
         "mode": FINITE_STREAM_MODE,
@@ -573,8 +531,6 @@ def reset_stream_cursor(workspace: Workspace) -> dict[str, Any]:
         workspace.dead_letters_dir,
         workspace.normalized_dir,
         workspace.derived_dir,
-        workspace.detections_dir,
-        workspace.cases_dir,
         workspace.ops_dir,
         workspace.founder_dir,
     ):
@@ -601,7 +557,6 @@ def reset_stream_cursor(workspace: Workspace) -> dict[str, Any]:
                 "complete": False,
             },
         )
-    workspace.request_projection_refresh()
     return {
         "status": "reset",
         "total_source_events": total,

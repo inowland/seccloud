@@ -5,14 +5,22 @@ from typing import Any
 
 from seccloud.contracts import Case
 from seccloud.detection_context import ensure_detection_context
+from seccloud.event_query import get_event_detail, query_events
 from seccloud.feature_lake import load_feature_lake_snapshot
 from seccloud.ids import new_prefixed_id
-from seccloud.projection_store import (
-    fetch_detection_linked_events,
-    fetch_hot_event_detail,
-    fetch_timeline_events,
-)
 from seccloud.storage import Workspace, parse_timestamp
+from seccloud.workflow_store import (
+    get_case as get_workflow_case,
+)
+from seccloud.workflow_store import (
+    get_detection_state,
+    list_detection_states,
+    upsert_case,
+    upsert_detection_state,
+)
+from seccloud.workflow_store import (
+    list_cases as list_workflow_cases,
+)
 
 
 def _empty_peer_context() -> dict[str, Any]:
@@ -52,16 +60,118 @@ def _behavior_context_from_detection_context(
     }
 
 
-def list_detections(workspace: Workspace) -> list[dict[str, Any]]:
-    return workspace.list_detections()
+def _overlay_detection_workflow(
+    detection: dict[str, Any],
+    detection_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if detection_state is None:
+        return detection
+    return {
+        **detection,
+        "status": detection_state.get("status", detection.get("status", "open")),
+    }
 
 
-def active_detection_count(workspace: Workspace) -> int:
-    return sum(1 for detection in workspace.list_detections() if detection.get("status", "open") == "open")
+def _generated_detection_record(detection: dict[str, Any], dsn: str | None = None) -> dict[str, Any]:
+    if not dsn:
+        return detection
+    return {
+        **detection,
+        "status": "open",
+    }
 
 
-def _find_case_for_detection(workspace: Workspace, detection_id: str) -> dict[str, Any] | None:
-    for case in workspace.list_cases():
+def _get_detection_record(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
+    detection = workspace.get_detection(detection_id)
+    if not detection:
+        return {}
+    return _overlay_detection_workflow(
+        _generated_detection_record(detection, dsn=dsn),
+        get_detection_state(dsn, detection_id),
+    )
+
+
+def list_detections(workspace: Workspace, dsn: str | None = None) -> list[dict[str, Any]]:
+    detections = workspace.list_detections()
+    states_by_id = list_detection_states(
+        dsn,
+        [
+            str(item["detection_id"])
+            for item in detections
+            if isinstance(item, dict) and isinstance(item.get("detection_id"), str)
+        ],
+    )
+    return [
+        _overlay_detection_workflow(
+            _generated_detection_record(detection, dsn=dsn),
+            states_by_id.get(str(detection.get("detection_id"))),
+        )
+        for detection in detections
+    ]
+
+
+def list_active_detections_page(
+    workspace: Workspace,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    detections = [item for item in list_detections(workspace, dsn=dsn) if item.get("status", "open") == "open"]
+
+    def sort_key(detection: dict[str, Any]) -> tuple[datetime, str]:
+        for evidence in detection.get("evidence", []):
+            observed_at = evidence.get("observed_at")
+            if isinstance(observed_at, str) and observed_at:
+                return parse_timestamp(observed_at), str(detection.get("detection_id", ""))
+        return parse_timestamp("1970-01-01T00:00:00Z"), str(detection.get("detection_id", ""))
+
+    detections.sort(key=sort_key, reverse=True)
+    items = detections[offset : offset + limit]
+    return {
+        "items": items,
+        "page": {
+            "limit": limit,
+            "offset": offset,
+            "returned": len(items),
+            "total": len(detections),
+            "has_more": offset + len(items) < len(detections),
+        },
+    }
+
+
+def active_detection_count(workspace: Workspace, dsn: str | None = None) -> int:
+    return sum(1 for detection in list_detections(workspace, dsn=dsn) if detection.get("status", "open") == "open")
+
+
+def _require_workflow_store(dsn: str | None) -> str:
+    if dsn:
+        return dsn
+    raise RuntimeError("case workflow requires a configured workflow store")
+
+
+def _list_case_records(workspace: Workspace, dsn: str | None = None) -> list[dict[str, Any]]:
+    del workspace
+    return list_workflow_cases(_require_workflow_store(dsn))
+
+
+def _get_case_record(workspace: Workspace, case_id: str, dsn: str | None = None) -> dict[str, Any]:
+    del workspace
+    workflow_case = get_workflow_case(_require_workflow_store(dsn), case_id)
+    return workflow_case if workflow_case is not None else {}
+
+
+def _save_case_record(workspace: Workspace, case_payload: dict[str, Any], dsn: str | None = None) -> None:
+    del workspace
+    upsert_case(_require_workflow_store(dsn), case_payload)
+
+
+def _find_case_for_detection(
+    workspace: Workspace,
+    detection_id: str,
+    dsn: str | None = None,
+) -> dict[str, Any] | None:
+    for case in _list_case_records(workspace, dsn=dsn):
         if detection_id in case.get("detection_ids", []):
             return case
     return None
@@ -81,7 +191,8 @@ def _case_anchor_event(workspace: Workspace, case: dict[str, Any], dsn: str | No
     detection_ids = case.get("detection_ids", [])
     if not detection_ids:
         return None
-    return _detection_anchor_event(workspace, workspace.get_detection(detection_ids[0]), dsn=dsn)
+    detection = _get_detection_record(workspace, detection_ids[0], dsn=dsn)
+    return _detection_anchor_event(workspace, detection, dsn=dsn)
 
 
 def _find_groupable_case(
@@ -94,7 +205,7 @@ def _find_groupable_case(
         return None
     principal_id = anchor_event["principal"]["id"]
     observed_at = parse_timestamp(anchor_event["observed_at"])
-    for case in workspace.list_cases():
+    for case in _list_case_records(workspace, dsn=dsn):
         if case.get("status") != "open":
             continue
         case_anchor = _case_anchor_event(workspace, case, dsn=dsn)
@@ -126,19 +237,13 @@ def get_entity_timeline(
     limit: int = 25,
     dsn: str | None = None,
 ) -> list[dict[str, Any]]:
-    if dsn is not None and (principal_id is not None or resource_id is not None):
-        return fetch_timeline_events(
-            tenant_id=workspace.tenant_id,
-            principal_reference=principal_id,
-            resource_reference=resource_id,
-            limit=limit,
-            dsn=dsn,
-        )
-    return workspace.query_indexed_events(
+    return query_events(
+        workspace,
         principal_reference=principal_id,
         resource_reference=resource_id,
         limit=limit,
-    )
+        dsn=dsn,
+    )["items"]
 
 
 def build_evidence_bundle(workspace: Workspace, detection_id: str) -> dict[str, Any]:
@@ -158,64 +263,46 @@ def build_evidence_bundle(workspace: Workspace, detection_id: str) -> dict[str, 
     }
 
 
-def get_event_detail(workspace: Workspace, event_id: str, dsn: str | None = None) -> dict[str, Any] | None:
-    if dsn is not None:
-        indexed = fetch_hot_event_detail(tenant_id=workspace.tenant_id, event_id=event_id, dsn=dsn)
-        if indexed is not None:
-            return indexed["event_payload"]
-    if dsn is None:
-        return workspace.get_indexed_event(event_id)
-    return None
+def _empty_peer_comparison(
+    principal_id: str,
+    detection_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "principal_id": principal_id,
+        "peer_group": "unknown",
+        "resource_id": "unknown",
+        **_empty_peer_context(),
+        "principal_total_events": 0,
+        "principal_prior_event_count": 0,
+        "principal_prior_action_count": 0,
+        "principal_prior_resource_access_count": 0,
+        "peer_group_resource_access_count": 0,
+        "peer_group_principal_count": 0,
+        "detection_reasons": detection_reasons or [],
+        "geo_seen_before": False,
+    }
 
 
-def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
-    detection = workspace.get_detection(detection_id)
-    anchor_event = (
-        get_event_detail(
-            workspace,
-            detection["event_ids"][0],
-            dsn=dsn,
-        )
-        if detection.get("event_ids")
-        else None
-    )
+def _peer_comparison_from_anchor_event(
+    workspace: Workspace,
+    anchor_event: dict[str, Any] | None,
+    *,
+    detection_reasons: list[str] | None = None,
+    dsn: str | None = None,
+) -> dict[str, Any]:
     if anchor_event is None:
-        return {
-            "principal_id": detection.get("related_entity_ids", ["unknown"])[0],
-            "peer_group": "unknown",
-            "resource_id": "unknown",
-            **_empty_peer_context(),
-            "principal_total_events": 0,
-            "principal_prior_event_count": 0,
-            "principal_prior_action_count": 0,
-            "principal_prior_resource_access_count": 0,
-            "peer_group_resource_access_count": 0,
-            "peer_group_principal_count": 0,
-            "detection_reasons": detection["reasons"],
-            "geo_seen_before": False,
-        }
+        return _empty_peer_comparison("unknown", detection_reasons=detection_reasons)
 
     principal_id = anchor_event["principal"]["id"]
     peer_group = anchor_event["principal"]["department"]
     resource_id = anchor_event["resource"]["id"]
-
-    # Try to get live counts from postgres
-    if dsn is not None:
-        counts = _peer_counts_from_postgres(dsn, workspace.tenant_id, principal_id, peer_group, resource_id)
-        if counts is not None:
-            return {
-                **counts,
-                **_peer_context_from_feature_lake(workspace, anchor_event),
-                **_behavior_context_from_detection_context(workspace, anchor_event),
-                "detection_reasons": detection["reasons"],
-            }
 
     feature_counts = _peer_counts_from_feature_lake(workspace, anchor_event)
     if feature_counts is not None:
         return {
             **feature_counts,
             **_behavior_context_from_detection_context(workspace, anchor_event),
-            "detection_reasons": detection["reasons"],
+            "detection_reasons": detection_reasons or [],
         }
 
     event_scan_counts = _peer_counts_from_event_scan(workspace, anchor_event)
@@ -223,7 +310,7 @@ def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | No
         return {
             **event_scan_counts,
             **_behavior_context_from_detection_context(workspace, anchor_event),
-            "detection_reasons": detection["reasons"],
+            "detection_reasons": detection_reasons or [],
         }
 
     return {
@@ -237,8 +324,75 @@ def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | No
         "principal_prior_resource_access_count": 0,
         "peer_group_resource_access_count": 0,
         "peer_group_principal_count": 0,
-        "detection_reasons": detection["reasons"],
+        "detection_reasons": detection_reasons or [],
         "geo_seen_before": False,
+    }
+
+
+def build_peer_comparison(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
+    detection = _get_detection_record(workspace, detection_id, dsn=dsn)
+    anchor_event = (
+        get_event_detail(
+            workspace,
+            detection["event_ids"][0],
+            dsn=dsn,
+        )
+        if detection.get("event_ids")
+        else None
+    )
+    if anchor_event is None:
+        return _empty_peer_comparison(
+            detection.get("related_entity_ids", ["unknown"])[0],
+            detection_reasons=detection["reasons"],
+        )
+
+    return _peer_comparison_from_anchor_event(
+        workspace,
+        anchor_event,
+        detection_reasons=detection["reasons"],
+        dsn=dsn,
+    )
+
+
+def get_entity_detail(
+    workspace: Workspace,
+    principal_id: str,
+    *,
+    limit: int = 50,
+    dsn: str | None = None,
+) -> dict[str, Any] | None:
+    timeline = get_entity_timeline(workspace, principal_id=principal_id, limit=limit, dsn=dsn)
+    if not timeline:
+        return None
+
+    anchor_event = timeline[0]
+    peer_comparison = _peer_comparison_from_anchor_event(workspace, anchor_event, dsn=dsn)
+    sources = sorted(
+        {event["source"] for event in timeline if isinstance(event.get("source"), str) and event.get("source")}
+    )
+    resource_ids = {
+        event.get("resource", {}).get("id")
+        for event in timeline
+        if isinstance(event.get("resource", {}).get("id"), str)
+    }
+    high_sensitivity_event_count = sum(
+        1 for event in timeline if str(event.get("resource", {}).get("sensitivity", "")).lower() in {"high", "critical"}
+    )
+
+    return {
+        "principal": anchor_event["principal"],
+        "overview": {
+            "latest_observed_at": anchor_event.get("observed_at"),
+            "first_observed_at": timeline[-1].get("observed_at"),
+            "timeline_event_count": len(timeline),
+            "total_event_count": peer_comparison["principal_total_events"],
+            "distinct_source_count": len(sources),
+            "distinct_sources": sources,
+            "distinct_resource_count": len(resource_ids),
+            "high_sensitivity_event_count": high_sensitivity_event_count,
+        },
+        "peer_comparison": peer_comparison,
+        "timeline": timeline,
     }
 
 
@@ -365,63 +519,9 @@ def _peer_counts_from_event_scan(
     }
 
 
-def _peer_counts_from_postgres(
-    dsn: str,
-    tenant_id: str,
-    principal_id: str,
-    peer_group: str,
-    resource_id: str,
-) -> dict[str, Any] | None:
-    """Query hot_event_index for live peer comparison counts."""
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        from seccloud.projection_store import HOT_EVENT_INDEX_TABLE, _tbl
-
-        hei = _tbl(HOT_EVENT_INDEX_TABLE)
-        with psycopg.connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    psycopg.sql.SQL(
-                        "select count(*) as n from {hei} where tenant_id = %s and principal_id = %s"
-                    ).format(hei=hei),
-                    (tenant_id, principal_id),
-                )
-                total_events = cur.fetchone()["n"]
-
-                cur.execute(
-                    psycopg.sql.SQL(
-                        "select count(distinct principal_id) as n from {hei}"
-                        " where tenant_id = %s and principal_department = %s"
-                    ).format(hei=hei),
-                    (tenant_id, peer_group),
-                )
-                peer_count = cur.fetchone()["n"]
-
-        return {
-            "principal_id": principal_id,
-            "peer_group": peer_group,
-            "resource_id": resource_id,
-            "principal_total_events": total_events,
-            "peer_group_principal_count": peer_count,
-        }
-    except Exception:
-        return None
-
-
 def get_detection_detail(workspace: Workspace, detection_id: str, dsn: str | None = None) -> dict[str, Any]:
-    detection = workspace.get_detection(detection_id)
-    if dsn is not None:
-        event_details = fetch_detection_linked_events(
-            tenant_id=workspace.tenant_id,
-            detection_id=detection_id,
-            dsn=dsn,
-        )
-        if not event_details and detection.get("event_ids"):
-            event_details = [get_event_detail(workspace, event_id) for event_id in detection["event_ids"]]
-    else:
-        event_details = [get_event_detail(workspace, event_id) for event_id in detection["event_ids"]]
+    detection = _get_detection_record(workspace, detection_id, dsn=dsn)
+    event_details = [get_event_detail(workspace, event_id, dsn=dsn) for event_id in detection["event_ids"]]
     return {
         "detection": detection,
         "peer_comparison": build_peer_comparison(workspace, detection_id, dsn=dsn),
@@ -430,20 +530,35 @@ def get_detection_detail(workspace: Workspace, detection_id: str, dsn: str | Non
     }
 
 
-def acknowledge_detection(workspace: Workspace, detection_id: str) -> dict[str, Any]:
-    detection = workspace.get_detection(detection_id)
-    if detection is None:
+def acknowledge_detection(
+    workspace: Workspace,
+    detection_id: str,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    workflow_dsn = _require_workflow_store(dsn)
+    detection = _get_detection_record(workspace, detection_id, dsn=dsn)
+    if not detection:
         raise KeyError(f"Detection not found: {detection_id}")
     detection["status"] = "acknowledged"
-    workspace.save_detection(detection)
+    updated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    upsert_detection_state(
+        workflow_dsn,
+        detection_id=detection_id,
+        status="acknowledged",
+        updated_at=updated_at,
+    )
     return detection
 
 
-def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[str, Any]:
-    for existing_case in workspace.list_cases():
+def create_case_from_detection(
+    workspace: Workspace,
+    detection_id: str,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    for existing_case in _list_case_records(workspace, dsn=dsn):
         if detection_id in existing_case.get("detection_ids", []):
             return existing_case
-    detection = workspace.get_detection(detection_id)
+    detection = _get_detection_record(workspace, detection_id, dsn=dsn)
     timeline = set(detection.get("event_ids", []))
     evidence_snapshots = []
     if detection.get("related_entity_ids"):
@@ -461,7 +576,7 @@ def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[
             }
         )
     now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    groupable_case = _find_groupable_case(workspace, detection)
+    groupable_case = _find_groupable_case(workspace, detection, dsn=dsn)
     if groupable_case is not None:
         groupable_case["detection_ids"] = sorted(set(groupable_case.get("detection_ids", []) + [detection_id]))
         groupable_case["timeline_event_ids"] = sorted(set(groupable_case.get("timeline_event_ids", []) + timeline_ids))
@@ -474,7 +589,7 @@ def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[
             if item["pointer"]["object_key"] not in existing_pointers:
                 groupable_case.setdefault("evidence_snapshots", []).append(item)
         groupable_case["updated_at"] = now
-        workspace.save_case(groupable_case)
+        _save_case_record(workspace, groupable_case, dsn=dsn)
         _persist_case_artifact(workspace, groupable_case)
         return groupable_case
     case = Case(
@@ -489,17 +604,21 @@ def create_case_from_detection(workspace: Workspace, detection_id: str) -> dict[
         created_at=now,
         updated_at=now,
     )
-    workspace.save_case(case.to_dict())
+    _save_case_record(workspace, case.to_dict(), dsn=dsn)
     _persist_case_artifact(workspace, case.to_dict())
     return case.to_dict()
 
 
-def summarize_case(workspace: Workspace, case_id: str) -> dict[str, Any]:
-    case = workspace.get_case(case_id)
-    detections = [workspace.get_detection(detection_id) for detection_id in case.get("detection_ids", [])]
+def summarize_case(workspace: Workspace, case_id: str, dsn: str | None = None) -> dict[str, Any]:
+    case = _get_case_record(workspace, case_id, dsn=dsn)
+    detections = [
+        _get_detection_record(workspace, detection_id, dsn=dsn) for detection_id in case.get("detection_ids", [])
+    ]
     primary_detection = detections[0] if detections else None
-    peer_comparison = build_peer_comparison(workspace, primary_detection["detection_id"]) if primary_detection else {}
-    anchor_event = _detection_anchor_event(workspace, primary_detection) if primary_detection else None
+    peer_comparison = (
+        build_peer_comparison(workspace, primary_detection["detection_id"], dsn=dsn) if primary_detection else {}
+    )
+    anchor_event = _detection_anchor_event(workspace, primary_detection, dsn=dsn) if primary_detection else None
     return {
         "case_id": case_id,
         "status": case["status"],
@@ -524,16 +643,18 @@ def summarize_case(workspace: Workspace, case_id: str) -> dict[str, Any]:
     }
 
 
-def get_case_detail(workspace: Workspace, case_id: str) -> dict[str, Any]:
-    case = workspace.get_case(case_id)
-    linked_detections = [workspace.get_detection(detection_id) for detection_id in case.get("detection_ids", [])]
+def get_case_detail(workspace: Workspace, case_id: str, dsn: str | None = None) -> dict[str, Any]:
+    case = _get_case_record(workspace, case_id, dsn=dsn)
+    linked_detections = [
+        _get_detection_record(workspace, detection_id, dsn=dsn) for detection_id in case.get("detection_ids", [])
+    ]
     timeline_events = [
         event
         for event in (get_event_detail(workspace, event_id) for event_id in case.get("timeline_event_ids", []))
         if event is not None
     ]
     return {
-        "summary": summarize_case(workspace, case_id),
+        "summary": summarize_case(workspace, case_id, dsn=dsn),
         "case": case,
         "detections": linked_detections,
         "timeline_events": timeline_events,
@@ -546,8 +667,9 @@ def update_case(
     disposition: str | None = None,
     analyst_note: str | None = None,
     feedback_label: str | None = None,
+    dsn: str | None = None,
 ) -> dict[str, Any]:
-    case = workspace.get_case(case_id)
+    case = _get_case_record(workspace, case_id, dsn=dsn)
     if disposition is not None:
         case["disposition"] = disposition
     if analyst_note:
@@ -560,5 +682,5 @@ def update_case(
             derived_state["feedback_labels"].setdefault(detection_id, []).append(feedback_label)
         workspace.save_derived_state(derived_state)
     case["updated_at"] = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    workspace.save_case(case)
+    _save_case_record(workspace, case, dsn=dsn)
     return case

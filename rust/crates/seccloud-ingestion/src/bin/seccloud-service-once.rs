@@ -9,7 +9,7 @@ struct Args {
     #[arg(long)]
     tenant_id: String,
     #[arg(long)]
-    dsn: String,
+    dsn: Option<String>,
     #[arg(long)]
     max_batches: Option<usize>,
 }
@@ -18,7 +18,7 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     seccloud_ingestion::init_runtime_logging("seccloud-service-once");
     let args = Args::parse();
-    let runtime = LocalRuntimeContext::new(args.workspace, args.tenant_id, Some(args.dsn))?;
+    let runtime = LocalRuntimeContext::new(args.workspace, args.tenant_id, args.dsn)?;
     tracing::info!(
         workspace = %runtime.workspace().display(),
         tenant_id = runtime.tenant_id(),

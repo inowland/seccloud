@@ -170,6 +170,7 @@ def normalize_raw_event(workspace: Workspace, raw_event: dict[str, Any], object_
 
 def ingest_raw_events(workspace: Workspace, dsn: str | None = None) -> dict[str, Any]:
     workspace.bootstrap()
+    del dsn
     manifest = workspace.load_ingest_manifest()
     ingested_raw_ids = set(manifest["raw_event_ids"])
     ingested_raw_keys = set(manifest.get("raw_event_keys", []))
@@ -222,19 +223,16 @@ def ingest_raw_events(workspace: Workspace, dsn: str | None = None) -> dict[str,
         normalized_keys.add(event.event_key)
         normalized_ids.add(event.event_id)
         event_payload = event.to_dict()
-        if dsn is None:
-            # Local path: write canonical normalized lake artifacts
-            workspace.write_normalized_event(event_payload)
-        else:
-            # Projection-backed path: normalized lake artifacts only
-            workspace.ensure_normalized_lake_artifacts(event_payload)
+        workspace.write_normalized_event(event_payload)
         record_normalized_event(workspace, event_payload, created=True)
         batch_events.append(event_payload)
         added_normalized += 1
 
-    # Project events to postgres inline (single connection for the batch)
-    if dsn is not None and batch_events:
-        _project_events_inline(workspace, batch_events, dsn)
+    quickwit_result = None
+    if batch_events:
+        from seccloud.quickwit_index import index_canonical_event_batch
+
+        quickwit_result = index_canonical_event_batch(workspace, batch_events)
 
     workspace.save_ingest_manifest(
         {
@@ -255,28 +253,8 @@ def ingest_raw_events(workspace: Workspace, dsn: str | None = None) -> dict[str,
         "late_arrival_count": late_arrival_count,
         "dead_letter_count": dead_letter_count,
         "dead_letter_reasons": dead_letter_reasons,
+        "quickwit": quickwit_result,
     }
-
-
-def _project_events_inline(
-    workspace: Workspace,
-    events: list[dict[str, Any]],
-    dsn: str,
-) -> None:
-    """Project a batch of normalized events directly to postgres."""
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        from seccloud.projection_store import ensure_projection_schema, upsert_event_rows
-
-        with psycopg.connect(dsn, row_factory=dict_row) as conn:
-            ensure_projection_schema(conn)
-            with conn.cursor() as cur:
-                upsert_event_rows(cur, workspace, events)
-            conn.commit()
-    except Exception:
-        pass  # Non-fatal — projection sync will catch up
 
 
 def _compact_derived_state(
@@ -296,65 +274,6 @@ def _compact_derived_state(
         "feedback_labels": dict(feedback_labels),
         "metadata": dict(metadata),
     }
-
-
-def _project_detections_fast(
-    workspace: Workspace,
-    detections: list[dict[str, Any]],
-) -> None:
-    """Project detections directly to postgres without scanning event files."""
-    import json
-
-    from seccloud.projection_store import (
-        PROJECTED_DETECTIONS_TABLE,
-        _tbl,
-        default_projection_dsn,
-        ensure_projection_schema,
-    )
-
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-    except ImportError:
-        return
-
-    dsn = default_projection_dsn()
-    try:
-        with psycopg.connect(dsn, row_factory=dict_row) as conn:
-            ensure_projection_schema(conn)
-            pd = _tbl(PROJECTED_DETECTIONS_TABLE)
-            with conn.cursor() as cur:
-                for det in detections:
-                    # Use the earliest evidence timestamp as observed_at
-                    observed_at = None
-                    for ev in det.get("evidence", []):
-                        ts = ev.get("observed_at")
-                        if ts and (observed_at is None or ts < observed_at):
-                            observed_at = ts
-                    if observed_at is None:
-                        observed_at = "2026-01-01T00:00:00Z"
-                    cur.execute(
-                        psycopg.sql.SQL("""
-                        insert into {pd} (
-                          tenant_id, detection_id, observed_at, payload
-                        ) values (
-                          %(tenant_id)s, %(detection_id)s, %(observed_at)s, %(payload)s::jsonb
-                        )
-                        on conflict (detection_id) do update set
-                          tenant_id = excluded.tenant_id,
-                          observed_at = excluded.observed_at,
-                          payload = excluded.payload
-                        """).format(pd=pd),
-                        {
-                            "tenant_id": workspace.tenant_id,
-                            "detection_id": det["detection_id"],
-                            "observed_at": observed_at,
-                            "payload": json.dumps(det),
-                        },
-                    )
-            conn.commit()
-    except Exception:
-        pass  # Non-fatal — full projection sync will catch up
 
 
 def build_derived_state_and_detections(workspace: Workspace) -> dict[str, Any]:

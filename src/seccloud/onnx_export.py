@@ -196,7 +196,7 @@ def export_model(
                 "weights": {0: batch_dim},
                 "mask": {0: batch_dim},
             },
-            opset_version=17,
+            opset_version=18,
         )
         action_paths[source] = path
 
@@ -240,7 +240,7 @@ def export_model(
             "duration": {0: batch_dim},
             "privilege": {0: batch_dim},
         },
-        opset_version=17,
+        opset_version=18,
     )
 
     return ExportedModel(

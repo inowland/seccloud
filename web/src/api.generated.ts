@@ -191,6 +191,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/entities/{principal_key}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Entity Detail */
+    get: operations["entity_detail_api_entities__principal_key__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/detections/{detection_id}/acknowledge": {
     parameters: {
       query?: never;
@@ -254,6 +271,23 @@ export interface components {
       verb: string;
       /** Category */
       category: string;
+    };
+    /** CanonicalEventStoreStatus */
+    CanonicalEventStoreStatus: {
+      /** Canonical Store */
+      canonical_store: string;
+      /** Canonical Format */
+      canonical_format: string;
+      /** Query Backend */
+      query_backend: string;
+      /** Detail Hydration */
+      detail_hydration: string;
+      /** Cursor Query Support */
+      cursor_query_support: boolean;
+      /** Text Query Support */
+      text_query_support: boolean;
+      /** Time Range Support */
+      time_range_support: boolean;
     };
     /** Detection */
     Detection: {
@@ -375,6 +409,33 @@ export interface components {
       /** Detection Reasons */
       detection_reasons: string[];
     };
+    /** EntityDetail */
+    EntityDetail: {
+      principal: components["schemas"]["Principal"];
+      overview: components["schemas"]["EntityOverview"];
+      peer_comparison: components["schemas"]["DetectionPeerComparison"];
+      /** Timeline */
+      timeline: components["schemas"]["Event"][];
+    };
+    /** EntityOverview */
+    EntityOverview: {
+      /** Latest Observed At */
+      latest_observed_at?: string | null;
+      /** First Observed At */
+      first_observed_at?: string | null;
+      /** Timeline Event Count */
+      timeline_event_count: number;
+      /** Total Event Count */
+      total_event_count: number;
+      /** Distinct Source Count */
+      distinct_source_count: number;
+      /** Distinct Sources */
+      distinct_sources: string[];
+      /** Distinct Resource Count */
+      distinct_resource_count: number;
+      /** High Sensitivity Event Count */
+      high_sensitivity_event_count: number;
+    };
     /** Event */
     Event: {
       /** Event Id */
@@ -421,7 +482,39 @@ export interface components {
     EventList: {
       /** Items */
       items: components["schemas"]["Event"][];
-      page: components["schemas"]["Pagination"];
+      page: components["schemas"]["EventQueryPage"];
+      freshness: components["schemas"]["EventQueryFreshness"];
+    };
+    /** EventQueryFreshness */
+    EventQueryFreshness: {
+      /** Query Backend */
+      query_backend: string;
+      /** Canonical Store */
+      canonical_store: string;
+      /** Canonical Format */
+      canonical_format: string;
+      /**
+       * Status
+       * @default current
+       */
+      status: string;
+      /** Detail */
+      detail?: string | null;
+      /** Watermark At */
+      watermark_at?: string | null;
+    };
+    /** EventQueryPage */
+    EventQueryPage: {
+      /** Limit */
+      limit: number;
+      /** Returned */
+      returned: number;
+      /** Has More */
+      has_more: boolean;
+      /** Cursor */
+      cursor?: string | null;
+      /** Next Cursor */
+      next_cursor?: string | null;
     };
     /** EvidenceBundleItem */
     EvidenceBundleItem: {
@@ -507,6 +600,17 @@ export interface components {
       duplicate: boolean;
       /** Queue Path */
       queue_path: string;
+    };
+    /** IntakeStatus */
+    IntakeStatus: {
+      /** Pending Batch Count */
+      pending_batch_count: number;
+      /** Processed Batch Count */
+      processed_batch_count: number;
+      /** Submitted Batch Count */
+      submitted_batch_count: number;
+      /** Accepted Idempotency Key Count */
+      accepted_idempotency_key_count: number;
     };
     /** ModelActivationGateStatus */
     ModelActivationGateStatus: {
@@ -748,6 +852,19 @@ export interface components {
       /** Has More */
       has_more: boolean;
     };
+    /** PostgresStatus */
+    PostgresStatus: {
+      /** Root */
+      root: string;
+      /** Dsn */
+      dsn?: string | null;
+      /** Paths */
+      paths: {
+        [key: string]: string;
+      };
+      /** Initialized */
+      initialized: boolean;
+    };
     /** Principal */
     Principal: {
       /** Id */
@@ -771,13 +888,56 @@ export interface components {
         [key: string]: unknown;
       };
     };
-    /** ProjectionStatus */
-    ProjectionStatus: {
-      /** Available */
-      available: boolean;
-      overview?: components["schemas"]["Overview"] | null;
-      /** Error */
-      error?: string | null;
+    /** QuickwitStatus */
+    QuickwitStatus: {
+      /** Root */
+      root: string;
+      /** Url */
+      url: string;
+      /** Index Id */
+      index_id: string;
+      /** Config Path */
+      config_path: string;
+      /** Log Path */
+      log_path: string;
+      /** Paths */
+      paths: {
+        [key: string]: string;
+      };
+      /** Initialized */
+      initialized: boolean;
+      /** Pid */
+      pid?: number | null;
+      /** Running */
+      running: boolean;
+      /** Ready */
+      ready: boolean;
+      /** Rss Bytes */
+      rss_bytes?: number | null;
+      /** Log Size Bytes */
+      log_size_bytes: number;
+      /** Last Start Attempted At */
+      last_start_attempted_at?: string | null;
+      /** Last Start Completed At */
+      last_start_completed_at?: string | null;
+      /** Last Start Duration Ms */
+      last_start_duration_ms?: number | null;
+      /** Last Start Status */
+      last_start_status?: string | null;
+      /** Last Start Error */
+      last_start_error?: string | null;
+      /** Watermark At */
+      watermark_at?: string | null;
+      /** Indexed Event Count */
+      indexed_event_count: number;
+      /** Last Sync Completed At */
+      last_sync_completed_at?: string | null;
+      /** Last Sync Duration Ms */
+      last_sync_duration_ms?: number | null;
+      /** Last Sync Status */
+      last_sync_status?: string | null;
+      /** Last Sync Error */
+      last_sync_error?: string | null;
     };
     /** Resource */
     Resource: {
@@ -802,17 +962,24 @@ export interface components {
     };
     /** RuntimeStatus */
     RuntimeStatus: {
+      /** Workspace */
+      workspace: string;
       /** Tenant Id */
       tenant_id: string;
+      stream_state: components["schemas"]["StreamState"];
       worker_state: components["schemas"]["WorkerState"];
       feature_tables: components["schemas"]["FeatureTableStatus"];
       feature_vocab: components["schemas"]["FeatureVocabStatus"];
       scoring_input: components["schemas"]["ScoringInputStatus"];
       model_runtime: components["schemas"]["ModelRuntimeStatus"];
       event_index: components["schemas"]["EventIndexStatus"];
+      canonical_event_store: components["schemas"]["CanonicalEventStoreStatus"];
+      quickwit: components["schemas"]["QuickwitStatus"];
       detection_context: components["schemas"]["DetectionContextStatus"];
       identity_profiles: components["schemas"]["IdentityProfilesStatus"];
-      projection: components["schemas"]["ProjectionStatus"];
+      worker_control: components["schemas"]["WorkerControlStatus"];
+      intake: components["schemas"]["IntakeStatus"];
+      postgres: components["schemas"]["PostgresStatus"];
     };
     /** ScoringInputStatus */
     ScoringInputStatus: {
@@ -931,6 +1098,13 @@ export interface components {
       /** Context */
       ctx?: Record<string, never>;
     };
+    /** WorkerControlStatus */
+    WorkerControlStatus: {
+      /** Source Stats Refresh Requested */
+      source_stats_refresh_requested: boolean;
+      /** Source Stats Refresh Requested At */
+      source_stats_refresh_requested_at?: string | null;
+    };
     /** WorkerState */
     WorkerState: {
       /** Normalization Runs */
@@ -941,8 +1115,6 @@ export interface components {
       detection_runs: number;
       /** Source Stats Runs */
       source_stats_runs: number;
-      /** Projection Runs */
-      projection_runs: number;
       /** Service Runs */
       service_runs: number;
       /** Last Submitted Batch Id */
@@ -957,8 +1129,6 @@ export interface components {
       last_detection_at?: string | null;
       /** Last Source Stats At */
       last_source_stats_at?: string | null;
-      /** Last Projection At */
-      last_projection_at?: string | null;
       /** Last Service At */
       last_service_at?: string | null;
       /** Last Service Status */
@@ -1164,7 +1334,15 @@ export interface operations {
     parameters: {
       query?: {
         limit?: number;
-        offset?: number;
+        cursor?: string | null;
+        start_time?: string | null;
+        end_time?: string | null;
+        query?: string | null;
+        sources?: string[] | null;
+        action_categories?: string[] | null;
+        sensitivities?: string[] | null;
+        principal_reference?: string | null;
+        resource_reference?: string | null;
       };
       header?: never;
       path?: never;
@@ -1242,6 +1420,39 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["DetectionDetail"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  entity_detail_api_entities__principal_key__get: {
+    parameters: {
+      query?: {
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        principal_key: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EntityDetail"];
         };
       };
       /** @description Validation Error */

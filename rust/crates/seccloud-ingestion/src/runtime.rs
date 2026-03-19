@@ -36,12 +36,6 @@ impl LocalRuntimeContext {
         self.dsn.as_deref()
     }
 
-    pub fn require_dsn(&self) -> anyhow::Result<&str> {
-        self.dsn
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("runtime context is missing a projection DSN"))
-    }
-
     pub fn object_store(&self) -> Arc<dyn ObjectStore> {
         Arc::new(LocalObjectStore::new(&self.workspace))
     }

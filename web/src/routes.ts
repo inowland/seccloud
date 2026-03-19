@@ -1,9 +1,10 @@
-const pages = ["detections", "events", "integrations"] as const;
+const pages = ["detections", "events", "integrations", "pipeline"] as const;
 
 export type Page = (typeof pages)[number];
 export type Route =
   | { kind: "page"; page: Page }
   | { kind: "detection"; detectionId: string }
+  | { kind: "entity"; principalKey: string }
   | { kind: "event"; eventId: string }
   | { kind: "integration"; source: string };
 
@@ -22,6 +23,14 @@ export function parseRouteFromHash(hash: string): Route {
     return {
       kind: "detection",
       detectionId: decodeURIComponent(detectionMatch[1]),
+    };
+  }
+
+  const entityMatch = value.match(/^entity\/(.+)$/);
+  if (entityMatch) {
+    return {
+      kind: "entity",
+      principalKey: decodeURIComponent(entityMatch[1]),
     };
   }
 
@@ -48,6 +57,9 @@ export function routeToHash(route: Route): string {
   if (route.kind === "detection") {
     return `detection/${encodeURIComponent(route.detectionId)}`;
   }
+  if (route.kind === "entity") {
+    return `entity/${encodeURIComponent(route.principalKey)}`;
+  }
   if (route.kind === "integration") {
     return `integration/${encodeURIComponent(route.source)}`;
   }
@@ -63,6 +75,9 @@ export function pageForRoute(route: Route): Page {
     return route.page;
   }
   if (route.kind === "detection") {
+    return "detections";
+  }
+  if (route.kind === "entity") {
     return "detections";
   }
   if (route.kind === "integration") {

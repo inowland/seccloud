@@ -21,13 +21,14 @@ fn ensure_workspace_layout(workspace: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     seccloud_ingestion::init_runtime_logging("seccloud-detections");
     let args = Args::parse();
     let workspace = resolve_workspace_path(&args.workspace)?;
     tracing::info!(workspace = %workspace.display(), "starting detection worker");
     ensure_workspace_layout(&workspace)?;
-    let result = seccloud_ingestion::detector::run_detection_worker(&workspace)?;
+    let result = seccloud_ingestion::detector::run_detection_worker_async(&workspace).await?;
     local_runtime::record_detection_run(&workspace)?;
     println!("{}", serde_json::to_string(&result)?);
     Ok(())

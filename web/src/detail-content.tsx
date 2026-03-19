@@ -11,6 +11,7 @@ type JsonResponse<Path extends keyof paths, Method extends keyof paths[Path]> =
 type BadgeTone = "critical" | "attention" | "neutral" | "positive";
 type EventDetail = JsonResponse<"/api/events/{event_id}", "get">;
 type DetectionDetail = JsonResponse<"/api/detections/{detection_id}", "get">;
+type EntityDetail = JsonResponse<"/api/entities/{principal_key}", "get">;
 type RuntimeStatus = JsonResponse<"/api/runtime-status", "get">;
 type SourceCapabilityDetails = components["schemas"]["SourceCapabilityDetails"];
 
@@ -36,14 +37,22 @@ interface DetectionDetailContentProps extends FormattingHelpers {
   badgeToneForSeverity: (severity: string) => BadgeTone;
   detail: DetectionDetail;
   onAcknowledge: () => void;
+  openEntityPage: (principalKey: string) => void;
   openEventPage: (eventId: string) => void;
   stackSummaryCards?: boolean;
 }
 
-interface EventDetailContentProps {
+interface EntityDetailContentProps extends FormattingHelpers {
+  detail: EntityDetail;
+  openEventPage: (eventId: string) => void;
+}
+
+interface EventDetailContentProps extends Pick<
+  FormattingHelpers,
+  "formatObservedAt" | "formatSourceName"
+> {
   event: EventDetail;
-  formatObservedAt: (value: string) => string;
-  formatSourceName: (source: string) => string;
+  openEntityPage: (principalKey: string) => void;
 }
 
 interface IntegrationDetailContentProps {
@@ -60,6 +69,157 @@ interface IntegrationDetailContentProps {
   runtimeStatus: RuntimeStatus | null;
 }
 
+interface PipelineStatusContentProps extends Pick<
+  FormattingHelpers,
+  "formatNumber" | "formatObservedAt"
+> {
+  runtimeStatus: RuntimeStatus | null;
+}
+
+function topAttributions(detail: DetectionDetail): Array<[string, number]> {
+  return Object.entries(detail.detection.feature_attributions)
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, 3);
+}
+
+function formatBytes(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function pipelineStatusTone(
+  ready: boolean,
+  warning = false,
+  critical = false,
+): BadgeTone {
+  if (critical) {
+    return "critical";
+  }
+  if (ready && !warning) {
+    return "positive";
+  }
+  if (warning) {
+    return "attention";
+  }
+  return "neutral";
+}
+
+function detectionHighlights(
+  detail: DetectionDetail,
+  formatNumber: (value: number | undefined) => string,
+  formatSourceName: (source: string) => string,
+): string[] {
+  const anchorEvent = detail.events[0];
+  const topFeatures = topAttributions(detail);
+  const highlights = [
+    `${detail.detection.title} fired with score ${detail.detection.score.toFixed(2)} and confidence ${detail.detection.confidence.toFixed(2)}.`,
+  ];
+
+  if (anchorEvent) {
+    highlights.push(
+      `${anchorEvent.principal.display_name} ${anchorEvent.action.verb} ${anchorEvent.resource.name} in ${formatSourceName(anchorEvent.source)}.`,
+    );
+  }
+  if (detail.peer_comparison.principal_prior_resource_access_count === 0) {
+    highlights.push("The anchor resource appears new for this principal.");
+  }
+  if (!detail.peer_comparison.geo_seen_before) {
+    highlights.push(
+      "The activity occurred from a geography not seen previously.",
+    );
+  }
+  if (detail.peer_comparison.peer_group_principal_count > 0) {
+    highlights.push(
+      `${formatNumber(detail.peer_comparison.peer_group_resource_principal_count)} of ${formatNumber(detail.peer_comparison.peer_group_principal_count)} peers touched the same resource.`,
+    );
+  }
+  if (topFeatures.length > 0) {
+    highlights.push(
+      `Top model drivers were ${topFeatures
+        .map(([feature]) => feature.replace(/_/g, " "))
+        .join(", ")}.`,
+    );
+  }
+
+  return highlights;
+}
+
+function detectionNextActions(
+  detail: DetectionDetail,
+  formatSourceName: (source: string) => string,
+): ActionCard[] {
+  const anchorEvent = detail.events[0];
+  const actions: ActionCard[] = [];
+
+  actions.push({
+    title: "Pivot into the principal",
+    body: "Review the principal timeline first to confirm whether this alert fits a larger behavior shift or a one-off event.",
+    tone: "attention",
+  });
+
+  if (anchorEvent) {
+    actions.push({
+      title: "Validate the anchor event",
+      body: `Start with the ${formatSourceName(anchorEvent.source)} event and confirm the actor, action, resource, and sensitivity match the detection story.`,
+      tone: "neutral",
+    });
+  }
+
+  if (detail.peer_comparison.principal_prior_resource_access_count === 0) {
+    actions.push({
+      title: "Check for first-time access",
+      body: "This looks like a first-seen resource for the principal. Confirm whether the access was expected for their role or current task.",
+      tone: "critical",
+    });
+  }
+
+  if (!detail.peer_comparison.geo_seen_before) {
+    actions.push({
+      title: "Verify geography change",
+      body: "The location context appears new. Confirm whether this was travel, VPN behavior, or a stronger compromise indicator.",
+      tone: "critical",
+    });
+  }
+
+  if (
+    detail.evidence_bundle.evidence_items.some(
+      (item) => !item.retention_expired,
+    )
+  ) {
+    actions.push({
+      title: "Inspect raw evidence",
+      body: "Raw evidence is still available. Use it to verify that the normalized event and feature attribution match the source record.",
+      tone: "positive",
+    });
+  }
+
+  return actions.slice(0, 4);
+}
+
+function rawPayloadPreview(
+  payload: Record<string, unknown> | null,
+): string | null {
+  if (payload === null) {
+    return null;
+  }
+  const pretty = JSON.stringify(payload, null, 2);
+  if (pretty.length <= 900) {
+    return pretty;
+  }
+  return `${pretty.slice(0, 900)}\n...`;
+}
+
 export function DetectionDetailContent({
   acknowledging,
   badgeToneForSeverity,
@@ -68,9 +228,39 @@ export function DetectionDetailContent({
   formatObservedAt,
   formatSourceName,
   onAcknowledge,
+  openEntityPage,
   openEventPage,
   stackSummaryCards = false,
 }: DetectionDetailContentProps) {
+  const principalId =
+    detail.events[0]?.principal.id ?? detail.detection.related_entity_ids[0];
+  const anchorEvent = detail.events[0];
+  const highlights = detectionHighlights(
+    detail,
+    formatNumber,
+    formatSourceName,
+  );
+  const nextActions = detectionNextActions(detail, formatSourceName);
+  const topFeatures = topAttributions(detail);
+  const distinctSources = Array.from(
+    new Set(
+      detail.events
+        .map((event) => event.source)
+        .filter((source): source is string => Boolean(source)),
+    ),
+  );
+  const anchorEvidenceItem =
+    anchorEvent === undefined
+      ? null
+      : (detail.evidence_bundle.evidence_items.find(
+          (item) =>
+            item.pointer.object_key === anchorEvent.evidence.object_key ||
+            item.pointer.raw_event_id === anchorEvent.evidence.raw_event_id,
+        ) ?? null);
+  const anchorPayloadPreview = rawPayloadPreview(
+    anchorEvidenceItem?.raw_payload ?? null,
+  );
+
   return (
     <div className="detail-pane">
       <div className="detail-hero">
@@ -94,6 +284,11 @@ export function DetectionDetailContent({
           </div>
         </div>
         <div className="detail-hero__actions">
+          {principalId ? (
+            <button onClick={() => openEntityPage(principalId)} type="button">
+              Investigate Principal
+            </button>
+          ) : null}
           <button
             disabled={acknowledging || detail.detection.status !== "open"}
             onClick={onAcknowledge}
@@ -139,6 +334,34 @@ export function DetectionDetailContent({
         </dl>
       </DetailSectionCard>
 
+      <DetailSectionCard
+        title="Investigation summary"
+        subtitle="What changed and why this alert matters."
+      >
+        <ul className="flat-list">
+          {highlights.map((highlight) => (
+            <li key={highlight}>{highlight}</li>
+          ))}
+        </ul>
+      </DetailSectionCard>
+
+      <DetailSectionCard
+        title="Next actions"
+        subtitle="Recommended pivots before deciding whether to dismiss or escalate."
+      >
+        <div className="action-list">
+          {nextActions.map((action) => (
+            <article
+              className={`action-card action-card--${action.tone}`}
+              key={action.title}
+            >
+              <strong>{action.title}</strong>
+              <p>{action.body}</p>
+            </article>
+          ))}
+        </div>
+      </DetailSectionCard>
+
       <div
         className={
           stackSummaryCards
@@ -146,22 +369,53 @@ export function DetectionDetailContent({
             : "detail-section-grid"
         }
       >
-        <DetailSectionCard title="Reasons">
+        <DetailSectionCard
+          title="What changed"
+          subtitle="Behavior shifts visible in the current alert context."
+        >
+          <ul className="flat-list">
+            <li>
+              Prior accesses to resource:{" "}
+              {formatNumber(
+                detail.peer_comparison.principal_prior_resource_access_count,
+              )}
+            </li>
+            <li>
+              Baseline before event:{" "}
+              {formatNumber(detail.peer_comparison.principal_prior_event_count)}{" "}
+              events
+            </li>
+            <li>
+              Prior action count:{" "}
+              {formatNumber(
+                detail.peer_comparison.principal_prior_action_count,
+              )}
+            </li>
+            <li>
+              Geography seen before:{" "}
+              {detail.peer_comparison.geo_seen_before ? "yes" : "no"}
+            </li>
+            <li>
+              Distinct peers on resource:{" "}
+              {formatNumber(
+                detail.peer_comparison.peer_group_resource_principal_count,
+              )}
+              /{formatNumber(detail.peer_comparison.peer_group_principal_count)}
+            </li>
+          </ul>
+        </DetailSectionCard>
+
+        <DetailSectionCard
+          title="Why It Fired"
+          subtitle="Policy reasons and model signal for this detection."
+        >
           <ul className="flat-list">
             {detail.detection.reasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
-          </ul>
-        </DetailSectionCard>
-
-        {detail.detection.model_rationale && (
-          <DetailSectionCard title="Model rationale">
-            <ul className="flat-list">
+            {detail.detection.model_rationale ? (
               <li>
-                Scoring mode: {detail.detection.model_rationale.scoring_mode}
-              </li>
-              <li>
-                Applied threshold:{" "}
+                Threshold{" "}
                 {detail.detection.model_rationale.detection_threshold.toFixed(
                   2,
                 )}
@@ -169,6 +423,105 @@ export function DetectionDetailContent({
                 {detail.detection.model_rationale.model_score.toFixed(2)}
                 {" • "}margin{" "}
                 {detail.detection.model_rationale.score_margin.toFixed(2)}
+              </li>
+            ) : null}
+            {topFeatures.length > 0 ? (
+              <li>
+                Top feature signals:{" "}
+                {topFeatures
+                  .map(([feature]) => feature.replace(/_/g, " "))
+                  .join(", ")}
+              </li>
+            ) : null}
+          </ul>
+        </DetailSectionCard>
+
+        <DetailSectionCard
+          title="Evidence chain"
+          subtitle="How the alert connects to normalized events and raw proof."
+        >
+          <ul className="flat-list">
+            <li>
+              Related normalized events: {formatNumber(detail.events.length)}
+            </li>
+            <li>
+              Raw evidence objects:{" "}
+              {formatNumber(detail.evidence_bundle.evidence_items.length)}
+            </li>
+            <li>
+              Raw evidence available now:{" "}
+              {
+                detail.evidence_bundle.evidence_items.filter(
+                  (item) => !item.retention_expired,
+                ).length
+              }
+            </li>
+            <li>
+              Sources involved:{" "}
+              {distinctSources
+                .map((source) => formatSourceName(source))
+                .join(", ")}
+            </li>
+            {anchorEvent ? (
+              <li>
+                Anchor event: {anchorEvent.action.verb}{" "}
+                {anchorEvent.resource.name}
+              </li>
+            ) : null}
+          </ul>
+        </DetailSectionCard>
+
+        <DetailSectionCard
+          title="Anchor event"
+          subtitle="The event that best represents the detection narrative."
+        >
+          {anchorEvent ? (
+            <div className="list-stack list-stack--tight">
+              <div className="mini-card">
+                <div className="mini-card__header">
+                  <strong>
+                    {anchorEvent.principal.display_name}{" "}
+                    {anchorEvent.action.verb} {anchorEvent.resource.name}
+                  </strong>
+                  <span className="badge badge--neutral">
+                    {formatSourceName(anchorEvent.source)}
+                  </span>
+                </div>
+                <div className="detail-subtle">
+                  {formatObservedAt(anchorEvent.observed_at)} •{" "}
+                  {anchorEvent.action.category} •{" "}
+                  {anchorEvent.resource.sensitivity}
+                </div>
+                <div className="token-row">
+                  <span className="token token--muted">
+                    event {anchorEvent.event_id}
+                  </span>
+                  <span className="token token--muted">
+                    raw {anchorEvent.evidence.raw_event_id}
+                  </span>
+                </div>
+              </div>
+              {anchorPayloadPreview ? (
+                <pre className="json-preview">{anchorPayloadPreview}</pre>
+              ) : (
+                <div className="panel-note">
+                  Raw anchor payload is not currently available in the evidence
+                  bundle.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="panel-note">
+              No anchor event is available for this detection.
+            </div>
+          )}
+        </DetailSectionCard>
+
+        <DetailSectionCard title="Model rationale">
+          {detail.detection.model_rationale ? (
+            <ul className="flat-list">
+              <li>
+                Scoring mode: {detail.detection.model_rationale.scoring_mode}
               </li>
               <li>
                 Policy scope: {detail.detection.model_rationale.policy_scope}
@@ -184,11 +537,15 @@ export function DetectionDetailContent({
                 ).replace(/_/g, " ")}
               </li>
             </ul>
-          </DetailSectionCard>
-        )}
+          ) : (
+            <div className="panel-note">
+              No explicit model rationale was returned for this detection.
+            </div>
+          )}
+        </DetailSectionCard>
 
-        {Object.keys(detail.detection.feature_attributions).length > 0 && (
-          <DetailSectionCard title="Feature attributions">
+        <DetailSectionCard title="Feature attributions">
+          {Object.keys(detail.detection.feature_attributions).length > 0 ? (
             <div className="attribution-bars">
               {Object.entries(detail.detection.feature_attributions)
                 .sort(([, a], [, b]) => b - a)
@@ -215,8 +572,12 @@ export function DetectionDetailContent({
                   );
                 })}
             </div>
-          </DetailSectionCard>
-        )}
+          ) : (
+            <div className="panel-note">
+              No feature attribution data was returned for this detection.
+            </div>
+          )}
+        </DetailSectionCard>
 
         <DetailSectionCard title="Peer context">
           <ul className="flat-list">
@@ -232,16 +593,207 @@ export function DetectionDetailContent({
               {formatNumber(detail.peer_comparison.principal_total_events)}
             </li>
             <li>
-              Baseline before event:{" "}
-              {formatNumber(detail.peer_comparison.principal_prior_event_count)}{" "}
-              events {" • "}action seen{" "}
+              Peer-group accesses:{" "}
               {formatNumber(
-                detail.peer_comparison.principal_prior_action_count,
-              )}{" "}
-              times
+                detail.peer_comparison.peer_group_resource_access_count,
+              )}
             </li>
             <li>
-              Prior accesses to resource:{" "}
+              Peer sets: dept{" "}
+              {formatNumber(detail.peer_comparison.department_peer_count)}
+              {" • "}mgr{" "}
+              {formatNumber(detail.peer_comparison.manager_peer_count)}
+              {" • "}group{" "}
+              {formatNumber(detail.peer_comparison.group_peer_count)}
+            </li>
+          </ul>
+        </DetailSectionCard>
+      </div>
+
+      <DetailSectionCard title="Related events">
+        <div className="list-stack list-stack--tight">
+          {detail.events.slice(0, 6).map((event) => (
+            <button
+              className="mini-card mini-card--button"
+              key={event.event_id}
+              onClick={() => openEventPage(event.event_id)}
+            >
+              <div className="mini-card__header">
+                <strong>
+                  {event.principal.display_name} {event.action.verb}{" "}
+                  {event.resource.name}
+                </strong>
+                {anchorEvent && event.event_id === anchorEvent.event_id ? (
+                  <span className="badge badge--attention">Anchor</span>
+                ) : null}
+              </div>
+              <div className="detail-subtle">
+                {formatSourceName(event.source)} •{" "}
+                {formatObservedAt(event.observed_at)}
+              </div>
+            </button>
+          ))}
+        </div>
+      </DetailSectionCard>
+
+      <DetailSectionCard title="Evidence objects">
+        <div className="list-stack list-stack--tight">
+          {detail.evidence_bundle.evidence_items.map((item) => (
+            <div className="mini-card" key={item.pointer.object_key}>
+              <div className="mini-card__header">
+                <strong>{item.pointer.object_key}</strong>
+                {anchorEvidenceItem &&
+                item.pointer.object_key ===
+                  anchorEvidenceItem.pointer.object_key ? (
+                  <span className="badge badge--attention">Anchor</span>
+                ) : null}
+              </div>
+              <div className="detail-subtle">
+                {item.retention_expired
+                  ? "Retention expired"
+                  : "Raw evidence available"}
+              </div>
+              {item.raw_payload ? (
+                <pre className="json-preview">
+                  {rawPayloadPreview(item.raw_payload)}
+                </pre>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </DetailSectionCard>
+    </div>
+  );
+}
+
+function entityHighlights(
+  detail: EntityDetail,
+  formatSourceName: (source: string) => string,
+  formatNumber: (value: number | undefined) => string,
+): string[] {
+  const latestEvent = detail.timeline[0];
+  const highlights = [
+    `${detail.principal.display_name} shows ${formatNumber(detail.overview.timeline_event_count)} recent events across ${formatNumber(detail.overview.distinct_source_count)} source${detail.overview.distinct_source_count === 1 ? "" : "s"}.`,
+  ];
+
+  if (latestEvent) {
+    highlights.push(
+      `Most recent activity was ${latestEvent.action.verb} on ${latestEvent.resource.name} in ${formatSourceName(latestEvent.source)}.`,
+    );
+  }
+  if (detail.peer_comparison.principal_prior_resource_access_count === 0) {
+    highlights.push(
+      "The current resource appears to be new for this principal.",
+    );
+  }
+  if (!detail.peer_comparison.geo_seen_before) {
+    highlights.push(
+      "The current geography appears new relative to prior behavior.",
+    );
+  }
+  if (detail.peer_comparison.peer_group_principal_count > 0) {
+    highlights.push(
+      `${formatNumber(detail.peer_comparison.peer_group_resource_principal_count)} of ${formatNumber(detail.peer_comparison.peer_group_principal_count)} peers touched the anchor resource.`,
+    );
+  }
+  return highlights;
+}
+
+export function EntityDetailContent({
+  detail,
+  formatNumber,
+  formatObservedAt,
+  formatSourceName,
+  openEventPage,
+}: EntityDetailContentProps) {
+  const latestEvent = detail.timeline[0];
+  const highlights = entityHighlights(detail, formatSourceName, formatNumber);
+
+  return (
+    <div className="detail-pane">
+      <div className="detail-hero">
+        <div className="detail-hero__content">
+          <div>
+            <span className="badge badge--neutral">
+              {detail.principal.department}
+            </span>
+            <h3>{detail.principal.display_name}</h3>
+            <p className="detail-subtle">{detail.principal.email}</p>
+          </div>
+        </div>
+      </div>
+
+      <DetailSectionCard title="Principal summary">
+        <dl className="detail-field-grid">
+          <div className="detail-field">
+            <dt>Department</dt>
+            <dd>{detail.principal.department}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Role / privilege</dt>
+            <dd>
+              {detail.peer_comparison.principal_role} /{" "}
+              {detail.peer_comparison.principal_privilege_level}
+            </dd>
+          </div>
+          <div className="detail-field">
+            <dt>Recent events shown</dt>
+            <dd>{formatNumber(detail.overview.timeline_event_count)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Total events</dt>
+            <dd>{formatNumber(detail.overview.total_event_count)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Sources</dt>
+            <dd>{formatNumber(detail.overview.distinct_source_count)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>Resources touched</dt>
+            <dd>{formatNumber(detail.overview.distinct_resource_count)}</dd>
+          </div>
+          <div className="detail-field">
+            <dt>High-sensitivity events</dt>
+            <dd>
+              {formatNumber(detail.overview.high_sensitivity_event_count)}
+            </dd>
+          </div>
+          <div className="detail-field">
+            <dt>Latest activity</dt>
+            <dd>
+              {detail.overview.latest_observed_at
+                ? formatObservedAt(detail.overview.latest_observed_at)
+                : "Unknown"}
+            </dd>
+          </div>
+        </dl>
+      </DetailSectionCard>
+
+      <div className="detail-section-grid">
+        <DetailSectionCard
+          title="Investigation summary"
+          subtitle="What currently stands out for this principal."
+        >
+          <ul className="flat-list">
+            {highlights.map((highlight) => (
+              <li key={highlight}>{highlight}</li>
+            ))}
+          </ul>
+        </DetailSectionCard>
+
+        <DetailSectionCard title="Peer context">
+          <ul className="flat-list">
+            <li>
+              Typical location: {detail.peer_comparison.principal_location}
+            </li>
+            <li>
+              Prior action count:{" "}
+              {formatNumber(
+                detail.peer_comparison.principal_prior_action_count,
+              )}
+            </li>
+            <li>
+              Prior resource accesses:{" "}
               {formatNumber(
                 detail.peer_comparison.principal_prior_resource_access_count,
               )}
@@ -260,14 +812,6 @@ export function DetectionDetailContent({
               /{formatNumber(detail.peer_comparison.peer_group_principal_count)}
             </li>
             <li>
-              Peer sets: dept{" "}
-              {formatNumber(detail.peer_comparison.department_peer_count)}
-              {" • "}mgr{" "}
-              {formatNumber(detail.peer_comparison.manager_peer_count)}
-              {" • "}group{" "}
-              {formatNumber(detail.peer_comparison.group_peer_count)}
-            </li>
-            <li>
               Geography seen before:{" "}
               {detail.peer_comparison.geo_seen_before ? "yes" : "no"}
             </li>
@@ -275,41 +819,63 @@ export function DetectionDetailContent({
         </DetailSectionCard>
       </div>
 
-      <DetailSectionCard title="Related events">
+      <DetailSectionCard title="Source coverage">
+        <div className="token-row">
+          {detail.overview.distinct_sources.map((source) => (
+            <span className="token token--muted" key={source}>
+              {formatSourceName(source)}
+            </span>
+          ))}
+        </div>
+      </DetailSectionCard>
+
+      <DetailSectionCard
+        title="Principal timeline"
+        subtitle="Recent cross-source activity for this principal."
+      >
         <div className="list-stack list-stack--tight">
-          {detail.events.slice(0, 6).map((event) => (
+          {detail.timeline.map((event) => (
             <button
               className="mini-card mini-card--button"
               key={event.event_id}
               onClick={() => openEventPage(event.event_id)}
             >
-              <div>
-                {event.principal.display_name} {event.action.verb}{" "}
-                {event.resource.name}
+              <div className="mini-card__header">
+                <strong>
+                  {event.action.verb} {event.resource.name}
+                </strong>
+                <span className="badge badge--neutral">
+                  {formatSourceName(event.source)}
+                </span>
               </div>
               <div className="detail-subtle">
-                {formatSourceName(event.source)} •{" "}
-                {formatObservedAt(event.observed_at)}
+                {formatObservedAt(event.observed_at)} • {event.action.category}{" "}
+                • {event.resource.sensitivity}
               </div>
             </button>
           ))}
         </div>
       </DetailSectionCard>
 
-      <DetailSectionCard title="Evidence objects">
-        <div className="list-stack list-stack--tight">
-          {detail.evidence_bundle.evidence_items.map((item) => (
-            <div className="mini-card" key={item.pointer.object_key}>
-              <div>{item.pointer.object_key}</div>
-              <div className="detail-subtle">
-                {item.retention_expired
-                  ? "Retention expired"
-                  : "Raw evidence available"}
-              </div>
+      {latestEvent ? (
+        <DetailSectionCard title="Latest anchor event">
+          <div className="mini-card">
+            <div className="mini-card__header">
+              <strong>
+                {latestEvent.principal.display_name} {latestEvent.action.verb}{" "}
+                {latestEvent.resource.name}
+              </strong>
+              <span className="badge badge--neutral">
+                {formatSourceName(latestEvent.source)}
+              </span>
             </div>
-          ))}
-        </div>
-      </DetailSectionCard>
+            <div className="detail-subtle">
+              {formatObservedAt(latestEvent.observed_at)} •{" "}
+              {latestEvent.resource.sensitivity}
+            </div>
+          </div>
+        </DetailSectionCard>
+      ) : null}
     </div>
   );
 }
@@ -318,6 +884,7 @@ export function EventDetailContent({
   event,
   formatObservedAt,
   formatSourceName,
+  openEntityPage,
 }: EventDetailContentProps) {
   return (
     <div className="detail-pane">
@@ -331,6 +898,14 @@ export function EventDetailContent({
             {event.resource.name}
           </h3>
           <p className="detail-subtle">{formatObservedAt(event.observed_at)}</p>
+        </div>
+        <div className="detail-hero__actions">
+          <button
+            onClick={() => openEntityPage(event.principal.id)}
+            type="button"
+          >
+            Investigate Principal
+          </button>
         </div>
       </div>
 
@@ -408,11 +983,6 @@ export function IntegrationDetailContent({
   const deadLetterReasons = Object.entries(details.dead_letter_reason_counts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 6);
-  const projectedSourceCount =
-    runtimeStatus?.projection.overview?.ops_metadata.event_counts_by_source[
-      source
-    ] ?? 0;
-  const projectionStream = runtimeStatus?.projection.overview?.stream_state;
 
   return (
     <div className="detail-pane">
@@ -463,19 +1033,19 @@ export function IntegrationDetailContent({
 
       <div className="token-row">
         {details.missing_required_event_types.map((eventType) => (
-          <span className="token token--critical" key={eventType}>
+          <span className="badge badge--critical" key={eventType}>
             Missing type: {eventType}
           </span>
         ))}
         {details.missing_required_fields.map((field) => (
-          <span className="token token--critical" key={field}>
+          <span className="badge badge--critical" key={field}>
             Missing field: {field}
           </span>
         ))}
         {details.dead_letter_7d_count === 0 &&
         details.missing_required_event_types.length === 0 &&
         details.missing_required_fields.length === 0 ? (
-          <span className="token token--positive">
+          <span className="badge badge--positive">
             No current contract issues
           </span>
         ) : null}
@@ -507,7 +1077,7 @@ export function IntegrationDetailContent({
             <span className="detail-label">Required event types</span>
             <div className="token-row">
               {details.required_event_types.map((eventType) => (
-                <span className="token" key={eventType}>
+                <span className="badge badge--neutral" key={eventType}>
                   {eventType}
                 </span>
               ))}
@@ -519,7 +1089,7 @@ export function IntegrationDetailContent({
             <div className="token-row">
               {details.required_fields.map((field) => (
                 <span
-                  className={`token token--${
+                  className={`badge badge--${
                     details.required_field_coverage[field]
                       ? "positive"
                       : "critical"
@@ -540,13 +1110,13 @@ export function IntegrationDetailContent({
           <div>
             <span className="detail-label">Recent activity</span>
             <div className="token-row">
-              <span className="token token--muted">
+              <span className="badge badge--neutral">
                 Last raw:{" "}
                 {details.raw_last_seen_at
                   ? formatObservedAt(details.raw_last_seen_at)
                   : "waiting"}
               </span>
-              <span className="token token--muted">
+              <span className="badge badge--neutral">
                 Last normalized:{" "}
                 {details.normalized_last_seen_at
                   ? formatObservedAt(details.normalized_last_seen_at)
@@ -559,12 +1129,12 @@ export function IntegrationDetailContent({
             <span className="detail-label">Seen event types</span>
             <div className="token-row">
               {details.seen_event_types.length === 0 ? (
-                <span className="token token--muted">
+                <span className="badge badge--neutral">
                   No source activity seen yet
                 </span>
               ) : (
                 details.seen_event_types.map((eventType) => (
-                  <span className="token token--muted" key={eventType}>
+                  <span className="badge badge--neutral" key={eventType}>
                     {eventType}
                   </span>
                 ))
@@ -600,7 +1170,7 @@ export function IntegrationDetailContent({
 
       <DetailSectionCard
         title="Runtime substrate"
-        subtitle="What the local pipeline has actually materialized underneath the demo."
+        subtitle="What the local runtime has actually materialized."
       >
         {runtimeStatus === null ? (
           <div className="panel-note">
@@ -654,8 +1224,8 @@ export function IntegrationDetailContent({
                   {formatNumber(runtimeStatus.event_index.department_count)}
                 </li>
                 <li>
-                  This source in projection:{" "}
-                  {formatNumber(projectedSourceCount)}
+                  Normalized events for this source:{" "}
+                  {formatNumber(details.normalized_event_count)}
                 </li>
               </ul>
             </div>
@@ -886,45 +1456,492 @@ export function IntegrationDetailContent({
                   ))}
               </ul>
             </div>
-
-            <div className="mini-card">
-              <div className="record-card__header">
-                <div>
-                  <h3>Projection</h3>
-                  <p className="detail-subtle">
-                    Postgres-backed serving state for the UI and API.
-                  </p>
-                </div>
-                <span
-                  className={`badge badge--${
-                    runtimeStatus.projection.available ? "positive" : "critical"
-                  }`}
-                >
-                  {runtimeStatus.projection.available ? "Connected" : "Offline"}
-                </span>
-              </div>
-              <ul className="flat-list">
-                <li>
-                  Projected normalized events:{" "}
-                  {formatNumber(projectionStream?.normalized_event_count ?? 0)}
-                </li>
-                <li>
-                  Projected detections:{" "}
-                  {formatNumber(projectionStream?.detection_count ?? 0)}
-                </li>
-                <li>
-                  Pending intake batches:{" "}
-                  {formatNumber(runtimeStatus.worker_state.pending_batch_count)}
-                </li>
-              </ul>
-              {runtimeStatus.projection.error ? (
-                <div className="panel-note">
-                  {runtimeStatus.projection.error}
-                </div>
-              ) : null}
-            </div>
           </div>
         )}
+      </DetailSectionCard>
+    </div>
+  );
+}
+
+export function PipelineStatusContent({
+  formatNumber,
+  formatObservedAt,
+  runtimeStatus,
+}: PipelineStatusContentProps) {
+  if (runtimeStatus === null) {
+    return <div className="panel-note">Pipeline state is still loading.</div>;
+  }
+
+  const streamState = runtimeStatus.stream_state;
+  const quickwitHealthy =
+    runtimeStatus.quickwit.running &&
+    runtimeStatus.quickwit.ready &&
+    runtimeStatus.quickwit.last_sync_status !== "failed";
+  const scoringHealthy = runtimeStatus.scoring_input.ready;
+  const eventPlaneHealthy =
+    runtimeStatus.event_index.available &&
+    runtimeStatus.detection_context.available;
+  const modelActive =
+    runtimeStatus.model_runtime.effective_mode === "onnx_native";
+  const runtimeReady =
+    runtimeStatus.quickwit.initialized &&
+    runtimeStatus.quickwit.running &&
+    runtimeStatus.quickwit.ready;
+  const intakeBacklogCount = runtimeStatus.intake.pending_batch_count;
+  const processingBacklogCount = Math.max(
+    0,
+    (streamState.normalized_event_count ?? 0) -
+      runtimeStatus.event_index.event_count,
+  );
+  const streamBufferedCount = Math.max(
+    0,
+    streamState.total_source_events - streamState.cursor,
+  );
+  const streamPrimed = streamState.total_source_events > 0;
+  const streamLikelyAdvancing =
+    intakeBacklogCount > 0 || processingBacklogCount > 0;
+  const streamStatusLabel = streamLikelyAdvancing
+    ? "Advancing"
+    : streamBufferedCount > 0
+      ? "Buffered"
+      : streamPrimed && !streamState.complete
+        ? "Paused"
+        : streamState.complete
+          ? "Complete"
+          : "Idle";
+  const searchBacklogCount = Math.max(
+    0,
+    runtimeStatus.event_index.event_count -
+      runtimeStatus.quickwit.indexed_event_count,
+  );
+  const anyBacklog =
+    intakeBacklogCount > 0 ||
+    processingBacklogCount > 0 ||
+    searchBacklogCount > 0;
+  const caughtUp =
+    intakeBacklogCount === 0 &&
+    processingBacklogCount === 0 &&
+    searchBacklogCount === 0;
+  const freshnessTone = pipelineStatusTone(caughtUp, anyBacklog);
+  const modelTone = pipelineStatusTone(
+    modelActive && scoringHealthy,
+    !modelActive,
+  );
+  const searchTone = pipelineStatusTone(
+    quickwitHealthy && searchBacklogCount === 0,
+    quickwitHealthy && searchBacklogCount > 0,
+    !quickwitHealthy,
+  );
+  const runtimeStatusDetail = !runtimeStatus.quickwit.initialized
+    ? "Quickwit has not been initialized."
+    : !runtimeStatus.quickwit.running
+      ? "Quickwit is not running."
+      : !runtimeStatus.quickwit.ready
+        ? "Quickwit is still starting."
+        : "All required local services are up.";
+  const searchStatusDetail = !quickwitHealthy
+    ? runtimeStatus.quickwit.last_sync_status === "failed"
+      ? "Quickwit sync failed."
+      : !runtimeStatus.quickwit.running
+        ? "Quickwit is not running."
+        : !runtimeStatus.quickwit.ready
+          ? "Quickwit is still starting."
+          : "Quickwit is not healthy yet."
+    : searchBacklogCount > 0
+      ? `${formatNumber(searchBacklogCount)} searchable event${searchBacklogCount === 1 ? "" : "s"} are still missing from Quickwit.`
+      : "Quickwit is current with the event index.";
+  const freshnessSummary = caughtUp
+    ? "All visible stages are caught up."
+    : [
+        intakeBacklogCount > 0
+          ? `${formatNumber(intakeBacklogCount)} intake batch${intakeBacklogCount === 1 ? "" : "es"} queued`
+          : null,
+        processingBacklogCount > 0
+          ? `${formatNumber(processingBacklogCount)} source event${processingBacklogCount === 1 ? "" : "s"} waiting on processing`
+          : null,
+        searchBacklogCount > 0
+          ? `${formatNumber(searchBacklogCount)} searchable event${searchBacklogCount === 1 ? "" : "s"} still missing from Quickwit`
+          : null,
+        streamLikelyAdvancing ? "ingest stream still advancing" : null,
+        !streamLikelyAdvancing && streamBufferedCount > 0
+          ? `${formatNumber(streamBufferedCount)} source event${streamBufferedCount === 1 ? "" : "s"} buffered for future intake`
+          : null,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(" • ");
+  const formatMaybeObservedAt = (value: string | null | undefined) =>
+    value ? formatObservedAt(value) : "never";
+
+  return (
+    <div className="detail-pane">
+      <DetailSectionCard title="Pipeline">
+        <div className="record-card__header">
+          <div>
+            <strong>
+              {caughtUp
+                ? "Everything is up to date."
+                : "The pipeline is still catching up."}
+            </strong>
+            <p className="detail-subtle">{freshnessSummary}</p>
+          </div>
+          <span className={`badge badge--${freshnessTone}`}>
+            {caughtUp ? "Ready" : "Catching up"}
+          </span>
+        </div>
+        <div className="record-card__summary">
+          <div className="record-card__summary-item">
+            <span>Intake queue</span>
+            <strong>{formatNumber(intakeBacklogCount)}</strong>
+          </div>
+          <div className="record-card__summary-item">
+            <span>Processing lag</span>
+            <strong>{formatNumber(processingBacklogCount)}</strong>
+          </div>
+          <div className="record-card__summary-item">
+            <span>Search lag</span>
+            <strong>{formatNumber(searchBacklogCount)}</strong>
+          </div>
+          <div className="record-card__summary-item">
+            <span>Stream state</span>
+            <strong>{streamStatusLabel}</strong>
+          </div>
+        </div>
+        <ul className="flat-list pipeline-checklist">
+          <li>
+            <div className="pipeline-checklist__body">
+              <span>Runtime bootstrapped and services running</span>
+              <span className="detail-subtle">{runtimeStatusDetail}</span>
+            </div>
+            <span
+              className={`badge badge--${pipelineStatusTone(
+                runtimeReady,
+                false,
+                !runtimeReady,
+              )}`}
+            >
+              {runtimeReady ? "Ready" : "Not ready"}
+            </span>
+          </li>
+          <li>
+            <div className="pipeline-checklist__body">
+              <span>Processing is caught up to the current stream</span>
+              <span className="detail-subtle">
+                {processingBacklogCount === 0 && intakeBacklogCount === 0
+                  ? "No intake or processing backlog is visible."
+                  : `${formatNumber(intakeBacklogCount)} queued batch${intakeBacklogCount === 1 ? "" : "es"} and ${formatNumber(processingBacklogCount)} source event${processingBacklogCount === 1 ? "" : "s"} still waiting on processing.`}
+              </span>
+            </div>
+            <span
+              className={`badge badge--${pipelineStatusTone(
+                processingBacklogCount === 0 && intakeBacklogCount === 0,
+                processingBacklogCount > 0 || intakeBacklogCount > 0,
+              )}`}
+            >
+              {processingBacklogCount === 0 && intakeBacklogCount === 0
+                ? "Ready"
+                : "Catching up"}
+            </span>
+          </li>
+          <li>
+            <div className="pipeline-checklist__body">
+              <span>Investigation surfaces are online</span>
+              <span className="detail-subtle">
+                {eventPlaneHealthy
+                  ? "Event index and detection context are available."
+                  : "One or more investigation layers are still unavailable."}
+              </span>
+            </div>
+            <span
+              className={`badge badge--${pipelineStatusTone(
+                eventPlaneHealthy,
+                false,
+                !eventPlaneHealthy,
+              )}`}
+            >
+              {eventPlaneHealthy ? "Ready" : "Not ready"}
+            </span>
+          </li>
+          <li>
+            <div className="pipeline-checklist__body">
+              <span>Event search is current and healthy</span>
+              <span className="detail-subtle">{searchStatusDetail}</span>
+            </div>
+            <span className={`badge badge--${searchTone}`}>
+              {quickwitHealthy && searchBacklogCount === 0
+                ? "Ready"
+                : runtimeStatus.quickwit.last_sync_status === "failed"
+                  ? "Error"
+                  : "Catching up"}
+            </span>
+          </li>
+        </ul>
+      </DetailSectionCard>
+
+      <DetailSectionCard title="Advanced details">
+        <div className="pipeline-advanced-list">
+          <details className="pipeline-advanced">
+            <summary className="pipeline-advanced__summary">
+              Intake and processing
+              <span className={`badge badge--${freshnessTone}`}>
+                {caughtUp ? "Current" : "Backlog"}
+              </span>
+            </summary>
+            <ul className="flat-list">
+              <li>
+                Pending/processed batches:{" "}
+                {formatNumber(runtimeStatus.intake.pending_batch_count)}
+                {" / "}
+                {formatNumber(runtimeStatus.intake.processed_batch_count)}
+              </li>
+              <li>
+                Submitted/idempotency keys:{" "}
+                {formatNumber(runtimeStatus.intake.submitted_batch_count)}
+                {" / "}
+                {formatNumber(
+                  runtimeStatus.intake.accepted_idempotency_key_count,
+                )}
+              </li>
+              <li>
+                Stream cursor: {formatNumber(streamState.cursor)} of{" "}
+                {formatNumber(streamState.total_source_events)}
+              </li>
+              <li>
+                Normalized/indexed events:{" "}
+                {formatNumber(streamState.normalized_event_count ?? 0)}
+                {" / "}
+                {formatNumber(runtimeStatus.event_index.event_count)}
+              </li>
+              <li>
+                Last submitted/processed batch:{" "}
+                {runtimeStatus.worker_state.last_submitted_batch_id ?? "none"}
+                {" / "}
+                {runtimeStatus.worker_state.last_processed_batch_id ?? "none"}
+              </li>
+            </ul>
+          </details>
+
+          <details className="pipeline-advanced">
+            <summary className="pipeline-advanced__summary">
+              Event plane and Quickwit
+              <span className={`badge badge--${searchTone}`}>
+                {quickwitHealthy && searchBacklogCount === 0
+                  ? "Healthy"
+                  : runtimeStatus.quickwit.last_sync_status === "failed"
+                    ? "Error"
+                    : "Lagging"}
+              </span>
+            </summary>
+            <ul className="flat-list">
+              <li>
+                Event index/detection context:{" "}
+                {runtimeStatus.event_index.available ? "ready" : "pending"}
+                {" / "}
+                {runtimeStatus.detection_context.available
+                  ? "ready"
+                  : "pending"}
+              </li>
+              <li>
+                Manifest/Quickwit indexed events:{" "}
+                {formatNumber(runtimeStatus.event_index.event_count)}
+                {" / "}
+                {formatNumber(runtimeStatus.quickwit.indexed_event_count)}
+              </li>
+              <li>
+                Principal/resource/department keys:{" "}
+                {formatNumber(runtimeStatus.event_index.principal_key_count)}
+                {" / "}
+                {formatNumber(runtimeStatus.event_index.resource_key_count)}
+                {" / "}
+                {formatNumber(runtimeStatus.event_index.department_count)}
+              </li>
+              <li>
+                Query backend/detail hydration:{" "}
+                {runtimeStatus.canonical_event_store.query_backend}
+                {" / "}
+                {runtimeStatus.canonical_event_store.detail_hydration}
+              </li>
+              <li>
+                Quickwit start/sync:{" "}
+                {runtimeStatus.quickwit.last_start_status ?? "n/a"}
+                {" / "}
+                {runtimeStatus.quickwit.last_sync_status ?? "n/a"}
+              </li>
+              <li>
+                Quickwit startup/sync duration:{" "}
+                {runtimeStatus.quickwit.last_start_duration_ms ?? 0} ms
+                {" / "}
+                {runtimeStatus.quickwit.last_sync_duration_ms ?? 0} ms
+              </li>
+              <li>
+                Quickwit RSS/log size:{" "}
+                {formatBytes(runtimeStatus.quickwit.rss_bytes)}
+                {" / "}
+                {formatBytes(runtimeStatus.quickwit.log_size_bytes)}
+              </li>
+              <li>
+                Watermark:{" "}
+                {runtimeStatus.quickwit.watermark_at
+                  ? formatObservedAt(runtimeStatus.quickwit.watermark_at)
+                  : "none"}
+              </li>
+            </ul>
+            {runtimeStatus.quickwit.last_start_error ? (
+              <div className="panel-note">
+                Startup error: {runtimeStatus.quickwit.last_start_error}
+              </div>
+            ) : null}
+            {runtimeStatus.quickwit.last_sync_error ? (
+              <div className="panel-note">
+                Sync error: {runtimeStatus.quickwit.last_sync_error}
+              </div>
+            ) : null}
+          </details>
+
+          <details className="pipeline-advanced">
+            <summary className="pipeline-advanced__summary">
+              Feature lake and model
+              <span className={`badge badge--${modelTone}`}>
+                {modelActive ? "Model active" : "Fallback"}
+              </span>
+            </summary>
+            <ul className="flat-list">
+              <li>
+                Action/history rows:{" "}
+                {formatNumber(runtimeStatus.feature_tables.action_row_count)}
+                {" / "}
+                {formatNumber(runtimeStatus.feature_tables.history_row_count)}
+              </li>
+              <li>
+                Collaboration/static/peer rows:{" "}
+                {formatNumber(
+                  runtimeStatus.feature_tables.collaboration_row_count,
+                )}
+                {" / "}
+                {formatNumber(runtimeStatus.feature_tables.static_row_count)}
+                {" / "}
+                {formatNumber(
+                  runtimeStatus.feature_tables.peer_group_row_count,
+                )}
+              </li>
+              <li>
+                Vocab principals/resources:{" "}
+                {formatNumber(runtimeStatus.feature_vocab.principal_count)}
+                {" / "}
+                {formatNumber(runtimeStatus.feature_vocab.resource_count)}
+              </li>
+              <li>
+                Materialized tables:{" "}
+                {runtimeStatus.scoring_input.materialized_tables.join(", ") ||
+                  "none"}
+              </li>
+              <li>
+                Model gate:{" "}
+                {runtimeStatus.model_runtime.activation_gate.eligible
+                  ? "eligible"
+                  : "blocked"}
+                {" • "}
+                {runtimeStatus.model_runtime.activation_gate.reason}
+              </li>
+              <li>Scoring reason: {runtimeStatus.scoring_input.reason}</li>
+            </ul>
+          </details>
+
+          <details className="pipeline-advanced">
+            <summary className="pipeline-advanced__summary">
+              Operator state
+              <span
+                className={`badge badge--${pipelineStatusTone(
+                  eventPlaneHealthy && runtimeReady,
+                  !eventPlaneHealthy || !runtimeReady,
+                )}`}
+              >
+                {eventPlaneHealthy && runtimeReady ? "Healthy" : "Degraded"}
+              </span>
+            </summary>
+            <ul className="flat-list">
+              <li>
+                Stream normalized/detections:{" "}
+                {formatNumber(streamState.normalized_event_count ?? 0)}
+                {" / "}
+                {formatNumber(streamState.detection_count ?? 0)}
+              </li>
+              <li>
+                Normalization/feature/detection runs:{" "}
+                {formatNumber(runtimeStatus.worker_state.normalization_runs)}
+                {" / "}
+                {formatNumber(runtimeStatus.worker_state.feature_runs)}
+                {" / "}
+                {formatNumber(runtimeStatus.worker_state.detection_runs)}
+              </li>
+              <li>
+                Last normalization/feature/detection:{" "}
+                {runtimeStatus.worker_state.last_normalization_at
+                  ? formatObservedAt(
+                      runtimeStatus.worker_state.last_normalization_at,
+                    )
+                  : "never"}
+                {" / "}
+                {runtimeStatus.worker_state.last_feature_at
+                  ? formatObservedAt(runtimeStatus.worker_state.last_feature_at)
+                  : "never"}
+                {" / "}
+                {runtimeStatus.worker_state.last_detection_at
+                  ? formatObservedAt(
+                      runtimeStatus.worker_state.last_detection_at,
+                    )
+                  : "never"}
+              </li>
+              <li>
+                Last source stats/service:{" "}
+                {formatMaybeObservedAt(
+                  runtimeStatus.worker_state.last_source_stats_at,
+                )}
+                {" / "}
+                {formatMaybeObservedAt(
+                  runtimeStatus.worker_state.last_service_at,
+                )}
+              </li>
+              <li>
+                Identity profiles:{" "}
+                {runtimeStatus.identity_profiles.available
+                  ? "ready"
+                  : "pending"}
+                {" • "}
+                {runtimeStatus.identity_profiles.source ?? "unknown"}
+              </li>
+              <li>
+                Postgres:{" "}
+                {runtimeStatus.postgres.initialized ? "initialized" : "missing"}
+                {" • "}
+                {runtimeStatus.postgres.dsn ? "dsn configured" : "dsn missing"}
+              </li>
+              <li>
+                Source-stats refresh requested:{" "}
+                {runtimeStatus.worker_control.source_stats_refresh_requested
+                  ? `yes${
+                      runtimeStatus.worker_control
+                        .source_stats_refresh_requested_at
+                        ? ` @ ${formatObservedAt(
+                            runtimeStatus.worker_control
+                              .source_stats_refresh_requested_at,
+                          )}`
+                        : ""
+                    }`
+                  : "no"}
+              </li>
+              <li>
+                Postgres root/log: {runtimeStatus.postgres.root}
+                {" / "}
+                {runtimeStatus.postgres.paths.log ?? "n/a"}
+              </li>
+              <li>
+                Quickwit config/log: {runtimeStatus.quickwit.config_path}
+                {" / "}
+                {runtimeStatus.quickwit.log_path}
+              </li>
+            </ul>
+          </details>
+        </div>
       </DetailSectionCard>
     </div>
   );
