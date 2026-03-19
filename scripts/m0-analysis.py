@@ -345,7 +345,7 @@ def main():
         "cold_start": {str(k): v for k, v in cold_start_results.items()},
         "embedding_dim": {str(k): v for k, v in dim_results.items()},
     }
-    out_path = Path(__file__).parent.parent / "project" / "m0_analysis_results.json"
+    out_path = Path(__file__).parent.parent / "project" / "m0-analysis-results.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(output, f, indent=2, default=str)

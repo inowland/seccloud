@@ -134,7 +134,15 @@ If you want to compare model-backed detections against the heuristic baseline:
 uv run seccloud compare-detection-modes --workspace .seccloud
 ```
 
-## Dev Scripts Reference
+## Command Surface
+
+Use `uv run seccloud ...` for stable Seccloud runtime and operator commands. Use
+`npm run ...` for repo-level workflows: frontend tasks, lint/typecheck/format,
+and convenience aliases that wrap one or more Seccloud commands. Keep direct
+`scripts/` execution as an internal implementation detail unless a doc section is
+explicitly about a low-level helper.
+
+## NPM Commands
 
 All scripts are in `package.json` and run from the repo root.
 
@@ -175,15 +183,16 @@ All scripts are in `package.json` and run from the repo root.
 
 ### Local runtime support
 
-| Script                          | What it does                            |
-| ------------------------------- | --------------------------------------- |
-| `npm run local:postgres:start`  | Start embedded Postgres                 |
-| `npm run local:postgres:stop`   | Stop embedded Postgres                  |
-| `npm run local:quickwit:ensure` | Install or resolve local Quickwit       |
-| `npm run local:quickwit:start`  | Start embedded Quickwit                 |
-| `npm run local:quickwit:stop`   | Stop embedded Quickwit                  |
-| `npm run local:quickwit:sync`   | Sync the local Quickwit event index     |
-| `npm run local:quickwit:smoke`  | Run the Quickwit event-plane smoke test |
+| Script                          | What it does                                |
+| ------------------------------- | ------------------------------------------- |
+| `npm run local:postgres:start`  | Start embedded Postgres                     |
+| `npm run local:postgres:stop`   | Stop embedded Postgres                      |
+| `npm run local:quickwit:ensure` | Install or resolve local Quickwit           |
+| `npm run local:quickwit:start`  | Start embedded Quickwit                     |
+| `npm run local:quickwit:stop`   | Stop embedded Quickwit                      |
+| `npm run local:quickwit:sync`   | Sync the local Quickwit event index         |
+| `npm run local:quickwit:smoke`  | Run the Quickwit event-plane smoke test     |
+| `npm run smoke:e2e`             | Run the full collector -> worker smoke test |
 
 ### Quality
 
@@ -198,7 +207,7 @@ All scripts are in `package.json` and run from the repo root.
 Verify the full Rust → Python pipeline works end-to-end:
 
 ```bash
-bash scripts/e2e-smoke-test.sh
+npm run smoke:e2e
 ```
 
 This clears the workspace, runs all 4 Rust collectors, then runs the Rust local worker and verifies the end-to-end path completes cleanly.

@@ -40,7 +40,7 @@ fn run_oracle(fixture_path: &Path) -> Value {
     };
     let output = Command::new(&python)
         .args([
-            "scripts/normalization_parity_oracle.py",
+            "scripts/normalization-parity-oracle.py",
             fixture_path
                 .to_str()
                 .expect("fixture path should be valid unicode"),

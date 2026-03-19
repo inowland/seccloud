@@ -45,5 +45,8 @@ Include:
 
 - Do not commit local caches, virtualenvs, or generated runtime directories.
 - Keep README and contributor docs updated when commands or workflows change.
+- Use `uv run seccloud ...` for stable product/runtime commands and `npm run ...` for repo workflows or convenience aliases around them.
+- Prefer documented `seccloud` or `npm` entry points over calling `scripts/` directly; keep `scripts/` for internal helpers, tests, and research utilities.
+- Use `kebab-case` for human-invoked script/report filenames and `snake_case` for importable Python modules.
 - Treat `project/plan/` as the authoritative milestone plan. Update plan files when
   scope or architecture decisions change.

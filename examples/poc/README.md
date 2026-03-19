@@ -38,6 +38,6 @@ uv run seccloud start-postgres
 uv run seccloud init-stream
 uv run seccloud advance-stream --batch-size 8
 uv run seccloud run-worker-service-once
-uv run uvicorn seccloud.api:app --host 127.0.0.1 --port 8000
-npm run web
+uv run seccloud run-api --workspace .seccloud --runtime-root .
+npm run app:web
 ```

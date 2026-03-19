@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+from seccloud.api import create_app
 from seccloud.defaults import DEFAULT_WORKSPACE
 from seccloud.investigation import (
     build_evidence_bundle,
@@ -107,6 +108,14 @@ def _print(payload: Any) -> None:
 
 def _now_timestamp() -> str:
     return format_timestamp(datetime.now(UTC))
+
+
+def export_openapi_spec(output: str | Path) -> dict[str, Any]:
+    target = Path(output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    schema = create_app().openapi()
+    target.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+    return {"path": str(target.resolve())}
 
 
 @contextmanager
@@ -980,6 +989,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_api.add_argument("--port", type=int, default=8000)
     run_api.add_argument("--reload", action="store_true")
 
+    openapi_export = subparsers.add_parser(
+        "export-openapi-spec",
+        help="Repo maintenance: write the current FastAPI OpenAPI document to disk.",
+    )
+    openapi_export.add_argument("--output", default="web/openapi.json")
+
     init_postgres = subparsers.add_parser("init-postgres")
     init_postgres.add_argument("--runtime-root", default=".")
     start_postgres_cmd = subparsers.add_parser("start-postgres")
@@ -1098,6 +1113,8 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             reload=args.reload,
         )
+    elif args.command == "export-openapi-spec":
+        _print(export_openapi_spec(args.output))
     elif args.command == "run-source-stats-projector":
         assert workspace is not None
         _print(run_source_stats_projector(workspace))

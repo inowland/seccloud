@@ -10,7 +10,7 @@
     "fmt:rust": "cd rust && cargo fmt",
     "lint:py": "uv run ruff check src tests scripts && uv run ruff format --check src tests scripts",
     "lint:web": "eslint web/src",
-    "generate:api-types": "uv run python scripts/generate_openapi.py && openapi-typescript web/openapi.json -o web/src/api.generated.ts",
+    "generate:api-types": "uv run seccloud export-openapi-spec --output web/openapi.json && openapi-typescript web/openapi.json -o web/src/api.generated.ts",
     "typecheck": "tsc --noEmit --project web/tsconfig.json",
     "format": "uv run ruff format src tests scripts && prettier --write \"web/**/*.{js,jsx,ts,tsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
     "format:check": "prettier --check \"web/**/*.{js,jsx,ts,tsx,css,html}\" eslint.config.js .pre-commit-config.yaml \"*.{json,md}\"",
@@ -41,7 +41,8 @@
     "local:quickwit:start": "uv run seccloud start-quickwit --runtime-root .",
     "local:quickwit:stop": "uv run seccloud stop-quickwit --runtime-root .",
     "local:quickwit:sync": "uv run seccloud sync-quickwit-index --workspace .seccloud",
-    "local:quickwit:smoke": "bash scripts/quickwit-smoke-test.sh",
+    "local:quickwit:smoke": "uv run seccloud smoke-quickwit-events --workspace .seccloud --runtime-root .",
+    "smoke:e2e": "bash scripts/e2e-smoke-test.sh",
     "demo:load-example-batch:once": "npm run demo:queue-example-batch && npm run demo:process:once",
     "demo:stream": "uv run seccloud run-demo-stream --workspace .seccloud --batch-size 500 --interval-seconds 3",
     "loadtest": "cd rust && cargo run --release --bin seccloud-loadtest"

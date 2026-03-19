@@ -41,7 +41,7 @@ def build_oracle_result(fixture_path: Path) -> dict[str, object]:
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print("usage: normalization_parity_oracle.py <fixture-path>", file=sys.stderr)
+        print("usage: normalization-parity-oracle.py <fixture-path>", file=sys.stderr)
         return 2
     fixture_path = Path(sys.argv[1])
     result = build_oracle_result(fixture_path)
