@@ -5,8 +5,15 @@ import uuid
 from typing import Any
 
 
+def _new_uuid() -> uuid.UUID:
+    uuid7 = getattr(uuid, "uuid7", None)
+    if callable(uuid7):
+        return uuid7()
+    return uuid.uuid4()
+
+
 def new_prefixed_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid7()}"
+    return f"{prefix}_{_new_uuid()}"
 
 
 def stable_digest_key(prefix: str, *parts: Any) -> str:
